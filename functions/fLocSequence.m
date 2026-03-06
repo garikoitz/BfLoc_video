@@ -25,9 +25,9 @@ classdef fLocSequence
     end
 
     properties (Constant, Hidden)
-
-        stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'Processed_Videos'};
-        stim_set2 = {'EN_SC' 'CH_SC' 'IMG_SC' 'Scrambled_Processed_Videos'};
+        %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV' 'CH_AW'};
+        stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV'};
+        stim_set2 = {'EN_SC' 'CH_SC' 'IMG_SC' 'LSE_SWV'};
         %stim_set3 = [stim_set1, stim_set2];
         % JP
         %stim_set1 = {'body' 'JP_word1' 'adult' 'JP_FF1' 'JP_CB1' 'Processed_Videos'};
@@ -96,7 +96,7 @@ classdef fLocSequence
         % get ISI duration given task
         function isi_dur = get.isi_dur(seq)
             if seq.task_num == 3
-                isi_dur = 0;
+                isi_dur = 0.1;
             else
                 isi_dur = 0.1;
             end
@@ -133,16 +133,16 @@ classdef fLocSequence
             end
             
         % Ensure at least one video category is present in every run
-        video_cats = {'Processed_Videos', 'Scrambled_Processed_Videos'};
+        video_cats = {'LSE_WV', 'LSE_SWV'};
         for r = 1:size(run_sets,1)
             if ~any(ismember(run_sets(r,:), video_cats))
                 replace_idx = randi(size(run_sets,2));
                 % Insert a sensible default based on the selected stimulus set
                 switch seq.stim_set
                     case 1
-                        run_sets(r, replace_idx) = {'Processed_Videos'};
+                        run_sets(r, replace_idx) = {'LSE_WV'};
                     case 2
-                        run_sets(r, replace_idx) = {'Scrambled_Processed_Videos'};
+                        run_sets(r, replace_idx) = {'LSE_SWV'};
                     otherwise  % stim_set == 3
                         run_sets(r, replace_idx) = video_cats(randi(2));
                 end
@@ -237,6 +237,7 @@ classdef fLocSequence
                         [base, ext] = strtok(stim_list{idx}, '.');
                         probe_stim_names{j} = [base '_oddball' ext];
                     else
+                        %{
                         % For image blocks, use a randomly selected valid image from the same category as the oddball
                         % Extract the category from the filename
                         this_cat = regexprep(stim_cat_list{idx}, '-?\d+\.jpg', '');
@@ -254,7 +255,10 @@ classdef fLocSequence
                         % Mark the oddball image with _oddball before the extension
                         [base, ext] = strtok(stim_list{rand_idx}, '.');
                         probe_stim_names{j} = [base '_oddball' ext];
-                    
+                        %}
+                        oddball_nums = num2cell(randi(seq.stim_per_set, probes_per_run * seq.num_runs, 1));
+                        probe_stim_names = cellfun(@(X) ['scrambled-' num2str(X) '.jpg'], oddball_nums, 'uni', false);
+
                     end
                 end
                 
@@ -268,11 +272,11 @@ classdef fLocSequence
             flRP = seq.exp_dir;
             % Determine which video folders to scan based on stim_set
             if seq.stim_set == 1
-                video_folders = {'Processed_Videos'};
+                video_folders = {'LSE_WV'};
             elseif seq.stim_set == 2
-                video_folders = {'Scrambled_Processed_Videos'};
+                video_folders = {'LSE_SWV'};
             else  % stim_set == 3
-                video_folders = {'Processed_Videos', 'Scrambled_Processed_Videos'};
+                video_folders = {'LSE_WV', 'LSE_SWV'};
             end
             all_video_lengths = table();
             for vf = 1:numel(video_folders)

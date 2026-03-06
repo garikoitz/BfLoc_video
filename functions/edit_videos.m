@@ -5,7 +5,8 @@ function seq = edit_videos(seq)
 
     % Detect the video onsets and stimuli to go from 12 to 6
     how_many_stims = size(seq.stim_names, 1);
-    how_many_videos = length(find(~cellfun(@isempty, strfind(seq.stim_names(:,1), 'Video'))));
+    how_many_videos = length(find(~cellfun(@isempty, ...
+        strfind(seq.stim_names(:,1), 'LSE'))));
     new_how_many_videos = round(how_many_stims - how_many_videos / 2); 
 
     % Preallocate per-run cell containers
@@ -23,7 +24,7 @@ function seq = edit_videos(seq)
         task_probes = seq.task_probes(:, rr);
         old_videos_isis = isi * ones(size(task_probes));
 
-        video_ind = find(~cellfun(@isempty, strfind(stim_names, 'Video')));
+        video_ind = find(~cellfun(@isempty, strfind(stim_names, 'LSE')));
 
         n_complete_blocks = floor(length(video_ind) / 12);
         if n_complete_blocks == 0

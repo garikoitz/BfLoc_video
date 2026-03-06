@@ -15,7 +15,8 @@ function [w, center] = doScreen
 
     % Define rect for VGA-1 (which starts at x = 1920)
     second_screen_rect = [1920, 0, 2944, 768];  % 1080 VGA screen size is 1024x768
-
+    % second_screen_rect = [1920, 0, 2944, 600];
+    
     % Open the window on the selected screen using its full rect
     [w, rect] = Screen('OpenWindow', screen_num, 128, second_screen_rect);
 

@@ -112,7 +112,9 @@ classdef fLocSession
                 seq = make_runs(seq);
                 mkdir(fileparts(fpath));
                 % EDIT seq HERE, so that the videos are 6
-                if isempty(seq.all_video_lengths); error('Could not get video lengths, check code'); end
+                if isempty(seq.all_video_lengths); 
+                    error('Could not get video lengths, check code'); 
+                end
                 seq = edit_videos(seq);
                 save(fpath, 'seq', '-v7.3');
             else
