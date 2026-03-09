@@ -98,7 +98,7 @@ classdef fLocSession
             elseif session.task_num == 2
                 instructions = 'Fixate. Press a button when an image repeats with one intervening image.';
             else
-                instructions = 'Fixate. Press a button when when an oddball (green dot) image or video appears.';
+                instructions = 'Fixate. Press a button when an oddball appears: a scrambled image or a video with a red cross.';
             end
         end
 
@@ -230,6 +230,7 @@ classdef fLocSession
                     WaitSecs(stim_dur);
                     continue;
                 end
+                ii_press = []; ii_keys = [];
                 if img_ptrs(ii) == -1
                     stim_name = stim_names{ii};
                     if contains(stim_name, '_oddball')
@@ -253,21 +254,34 @@ classdef fLocSession
                     moviePtr = Screen('OpenMovie', window_ptr, moviePath);
                     Screen('PlayMovie', moviePtr, 1);
                     movieStart = GetSecs;
+                    [~, ~, ext_chk] = fileparts(stim_names{ii});
+                    isOddballVideo = contains(stim_names{ii}, '_oddball') && strcmpi(lower(ext_chk), '.mp4');
                     while (GetSecs - movieStart) < video_duration
                         tex = Screen('GetMovieImage', window_ptr, moviePtr, 1);
                         if tex <= 0
                             continue;
                         end
                         Screen('DrawTexture', window_ptr, tex, [], stim_rect);
-                        [~, ~, ext] = fileparts(stim_names{ii});
-                        isOddballVideo = contains(stim_names{ii}, '_oddball') && strcmpi(lower(ext), '.mp4');
-                        draw_fixation(window_ptr, center, fcol, isOddballVideo);
+                        if session.task_num == 3
+                            % Oddball task: only draw red fixation on oddball videos
+                            if isOddballVideo
+                                draw_fixation(window_ptr, center, fcol);
+                            end
+                        else
+                            % 1-back / 2-back: always draw fixation on all videos
+                            draw_fixation(window_ptr, center, fcol);
+                        end
                         Screen('Flip', window_ptr);
                         Screen('Close', tex);
                     end
                     Screen('PlayMovie', moviePtr, 0);
                     Screen('CloseMovie', moviePtr);
-                    WaitSecs(session.sequence.video_isis(ii));
+                    % Show fixation during video ISI and record keys
+                    Screen('FillRect', window_ptr, bcol);
+                    draw_fixation(window_ptr, center, fcol);
+                    Screen('Flip', window_ptr);
+                    [keys, ie] = record_keys(GetSecs, session.sequence.video_isis(ii), k);
+                    ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                 else
                     Screen('DrawTexture', window_ptr, img_ptrs(ii), [], stim_rect);
                     [~, ~, ext] = fileparts(stim_names{ii});
@@ -275,16 +289,15 @@ classdef fLocSession
                     draw_fixation(window_ptr, center, fcol, isOddballImage);
                     Screen('Flip', window_ptr);
                     WaitSecs(stim_dur);
-                end
-                ii_press = []; ii_keys = [];
-                [keys, ie] = record_keys(start_time + (ii - 1) * sdc, stim_dur, k);
-                ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
-                if isi_dur > 0
-                    Screen('FillRect', window_ptr, bcol);
-                    draw_fixation(window_ptr, center, fcol);
-                    [keys, ie] = record_keys(start_time + (ii - 1) * sdc + stim_dur, isi_dur, k);
+                    [keys, ie] = record_keys(start_time + (ii - 1) * sdc, stim_dur, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
-                    Screen('Flip', window_ptr);
+                    if isi_dur > 0
+                        Screen('FillRect', window_ptr, bcol);
+                        draw_fixation(window_ptr, center, fcol);
+                        [keys, ie] = record_keys(start_time + (ii - 1) * sdc + stim_dur, isi_dur, k);
+                        ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                        Screen('Flip', window_ptr);
+                    end
                 end
                 resp_keys{ii} = ii_keys;
                 resp_press(ii) = min(ii_press);

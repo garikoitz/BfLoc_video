@@ -227,38 +227,21 @@ classdef fLocSequence
             else
                 
                 % Oddball logic for task_num == 3
-                % Only the oddball video inserted as a probe in a video block gets '_oddball' appended.
-                % This allows display logic to show a green dot only for this video.
+                % Video blocks: the oddball probe is a random video with
+                %   '_oddball' appended so the display loop overlays a red
+                %   fixation cross (non-oddball videos have no cross).
+                % Image blocks: the oddball probe is a scrambled image.
                 probe_stim_names = cell(size(probe_stim_idxs));
                 for j = 1:length(probe_stim_idxs)
                     idx = probe_stim_idxs(j);
                     if contains(stim_list{idx}, '.mp4', 'IgnoreCase', true)
-                        % Mark ONLY the oddball video with '_oddball' before the extension
+                        % Keep the same random video but mark it as oddball
                         [base, ext] = strtok(stim_list{idx}, '.');
                         probe_stim_names{j} = [base '_oddball' ext];
                     else
-                        %{
-                        % For image blocks, use a randomly selected valid image from the same category as the oddball
-                        % Extract the category from the filename
-                        this_cat = regexprep(stim_cat_list{idx}, '-?\d+\.jpg', '');
-                        % Find all possible images in this category
-                        valid_idxs = find(strcmp(stim_cat_list, this_cat) & ~contains(stim_list, '_oddball') & contains(stim_list, '.jpg'));
-                        % Exclude the two images being separated by the oddball, if possible
-                        exclude_idxs = [idx-1, idx+1];
-                        valid_idxs = setdiff(valid_idxs, exclude_idxs);
-                        % Randomly select one
-                        if isempty(valid_idxs)
-                            % fallback: just pick any image from this category
-                            valid_idxs = find(strcmp(stim_cat_list, this_cat) & contains(stim_list, '.jpg'));
-                        end
-                        rand_idx = valid_idxs(randi(numel(valid_idxs)));
-                        % Mark the oddball image with _oddball before the extension
-                        [base, ext] = strtok(stim_list{rand_idx}, '.');
-                        probe_stim_names{j} = [base '_oddball' ext];
-                        %}
-                        oddball_nums = num2cell(randi(seq.stim_per_set, probes_per_run * seq.num_runs, 1));
-                        probe_stim_names = cellfun(@(X) ['scrambled-' num2str(X) '.jpg'], oddball_nums, 'uni', false);
-
+                        % Image oddball: replace with a scrambled image
+                        oddball_num = randi(seq.stim_per_set);
+                        probe_stim_names{j} = ['scrambled-' num2str(oddball_num) '.jpg'];
                     end
                 end
                 
