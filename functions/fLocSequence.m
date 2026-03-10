@@ -170,7 +170,7 @@ classdef fLocSequence
                 cat_list = ['baseline' run_sets(rr, :)];
                 cat_seq = cat_list(block_conds(:, rr) + 1);
                 stim_mat(:, :, rr) = repmat(cat_seq, stim_per_block, 1);
-            end
+        end
             stim_cat_list = reshape(stim_mat, [], 1);
 
             % --- Assign stimulus numbers per actual category occurrence ---
@@ -189,7 +189,7 @@ classdef fLocSequence
             end
 
             % --- Build file extensions (image/video) ---
-            is_video = contains(stim_cat_list, 'Video', 'IgnoreCase', true);
+            is_video = contains(stim_cat_list, 'LSE', 'IgnoreCase', true);
             file_exts = repmat({'.jpg'}, size(stim_cat_list));
             file_exts(is_video) = {'.mp4'};
 
