@@ -19,7 +19,7 @@ runme('testgari03', 0, 1, 2, 1)
 
 
 runme('ss01',0, 1, 1, 1)
-
+runme('ss01',0, 1, 1, 3)
 
 
 
