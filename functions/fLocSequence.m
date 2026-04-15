@@ -8,6 +8,8 @@ classdef fLocSequence
         task_probes % index of stimuli that are task probes
         all_video_lengths % lengths of the videos
         video_isis % calculated isi-s for videos so that all sums 6 secs
+        all_audio_lengths % lengths of the audio clips
+        audio_isis % calculated isi-s for audio so that all blocks sum 6 secs
         exp_dir
     end
 
@@ -19,15 +21,15 @@ classdef fLocSequence
     end
 
     properties (Constant)
-        stim_conds = {'English' 'Chinese' 'Images' 'Videos'};
+        stim_conds = {'English' 'Chinese' 'Audio' 'Images' 'Videos'};
         stim_per_block = 12;   % stimuli per block
         stim_duty_cycle = 0.5; % duration of stimulus duty cycle (s)
     end
 
     properties (Constant, Hidden)
         %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV' 'CH_AW'};
-        stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV'};
-        stim_set2 = {'EN_SC' 'CH_SC' 'IMG_SC' 'LSE_SWV'};
+        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV'};
+        stim_set2 = {'EN_SC' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
         %stim_set3 = [stim_set1, stim_set2];
         % JP
         %stim_set1 = {'body' 'JP_word1' 'adult' 'JP_FF1' 'JP_CB1' 'Processed_Videos'};
@@ -188,16 +190,18 @@ classdef fLocSequence
                 stim_num_list(cat_idxs) = num2cell(stim_nums(:));
             end
 
-            % --- Build file extensions (image/video) ---
+            % --- Build file extensions (image/video/audio) ---
             is_video = contains(stim_cat_list, 'LSE', 'IgnoreCase', true);
+            is_audio = contains(stim_cat_list, {'CH_AW', 'CH_RAW'}, 'IgnoreCase', true);
             file_exts = repmat({'.jpg'}, size(stim_cat_list));
             file_exts(is_video) = {'.mp4'};
+            file_exts(is_audio) = {'.wav'};
 
             % --- Build full filenames for each stimulus ---
             stim_num_list_fixed = cell(size(stim_cat_list));
             for i = 1:length(stim_cat_list)
                 if strcmpi(stim_cat_list{i}, 'baseline')
-                    stim_num_list_fixed{i} = '.jpg';
+                    stim_num_list_fixed{i} = '';  % keep as plain 'baseline'
                 else
                     stim_num_list_fixed{i} = ['-' num2str(stim_num_list{i}) file_exts{i}];
                 end
@@ -230,19 +234,13 @@ classdef fLocSequence
                 % Video blocks: the oddball probe is a random video with
                 %   '_oddball' appended so the display loop overlays a red
                 %   fixation cross (non-oddball videos have no cross).
-                % Image blocks: the oddball probe is a scrambled image.
+                % All stimulus types: keep the same stimulus unchanged.
+                % The oddball is signalled via task_probes (red fixation),
+                % not by changing the filename.
                 probe_stim_names = cell(size(probe_stim_idxs));
                 for j = 1:length(probe_stim_idxs)
                     idx = probe_stim_idxs(j);
-                    if contains(stim_list{idx}, '.mp4', 'IgnoreCase', true)
-                        % Keep the same random video but mark it as oddball
-                        [base, ext] = strtok(stim_list{idx}, '.');
-                        probe_stim_names{j} = [base '_oddball' ext];
-                    else
-                        % Image oddball: replace with a scrambled image
-                        oddball_num = randi(seq.stim_per_set);
-                        probe_stim_names{j} = ['scrambled-' num2str(oddball_num) '.jpg'];
-                    end
+                    probe_stim_names{j} = stim_list{idx};
                 end
                 
             end
@@ -277,6 +275,17 @@ classdef fLocSequence
                 error('Not enough videos in specified video folders.');
             end
 
+            % Measure audio file lengths
+            audio_cats = {'CH_AW', 'CH_RAW'};
+            all_audio_lengths = table();
+            for ac = 1:numel(audio_cats)
+                folder_path = fullfile(flRP, 'stimuli', audio_cats{ac});
+                if isfolder(folder_path)
+                    tmp_tbl = measure_audio_length(folder_path);
+                    all_audio_lengths = [all_audio_lengths; tmp_tbl];
+                end
+            end
+
             % store stimulus sequence parameters
             seq.block_onsets = block_onsets;
             seq.block_conds = block_conds;
@@ -285,6 +294,8 @@ classdef fLocSequence
             seq.task_probes = task_probes;
             seq.all_video_lengths = all_video_lengths;
             seq.video_isis = zeros(size(stim_onsets));
+            seq.all_audio_lengths = all_audio_lengths;
+            seq.audio_isis = zeros(size(stim_onsets));
         end
 
     end

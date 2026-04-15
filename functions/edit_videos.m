@@ -53,7 +53,7 @@ function seq = edit_videos(seq)
             [videos, new_isi] = find_video_combination(all_times, targetTotal, nSelect, isi, fill_strategy);
 
             % --- guarantee that the oddball video is kept (task 3) ---
-            oddball_idx_in_block = find(contains(queryStrings, '_oddball'));
+            oddball_idx_in_block = find(task_probes(block_vids) == 1);
             if ~isempty(oddball_idx_in_block)
                 if ~ismember(oddball_idx_in_block, videos)
                     videos(end) = oddball_idx_in_block;

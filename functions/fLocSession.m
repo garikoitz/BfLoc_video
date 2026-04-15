@@ -31,8 +31,9 @@ classdef fLocSession
     properties (Constant, Hidden)
         task_names = {'1back' '2back' 'oddball'};
         exp_dir = fileparts(fileparts(which(mfilename, 'class')));
-        fix_color = [255 0 0]; % fixation marker color (RGB)
-        text_color = 255;      % instruction text color (grayscale)
+        fix_color = [0 255 0];     % normal fixation color (green)
+        oddball_color = [255 0 0]; % oddball fixation color (red)
+        text_color = 255;          % instruction text color (grayscale)
         blank_color = 128;     % baseline screen color (grayscale)
         wait_dur = 1;          % seconds to wait for response
     end
@@ -116,6 +117,7 @@ classdef fLocSession
                     error('Could not get video lengths, check code'); 
                 end
                 seq = edit_videos(seq);
+                seq = edit_audios(seq);
                 save(fpath, 'seq', '-v7.3');
             else
                 load(fpath);
@@ -145,17 +147,31 @@ classdef fLocSession
             sdc = session.sequence.stim_duty_cycle;
             stim_dur = session.sequence.stim_dur;
             isi_dur = session.sequence.isi_dur;
-            stim_names = session.sequence.stim_names(:, run_num);
+            stim_names   = session.sequence.stim_names(:, run_num);
+            stim_onsets  = session.sequence.stim_onsets(:, run_num);  % precomputed absolute onsets
             stim_dir = fullfile(session.exp_dir, 'stimuli');
-            tcol = session.text_color; bcol = session.blank_color; fcol = session.fix_color;
+            tcol = session.text_color; bcol = session.blank_color;
+            fcol = session.fix_color;           % green: normal fixation
+            oddball_fcol = session.oddball_color; % red: oddball fixation
+            run_task_probes = session.sequence.task_probes(:, run_num);
             resp_keys = {}; resp_press = zeros(length(stim_names), 1);
             % setup screen and load all stimuli in run
             [window_ptr, center] = do_screen;
+            ifi = Screen('GetFlipInterval', window_ptr); % inter-frame interval for scheduling
             center_x = center(1); center_y = center(2); s = session.stim_size / 2;
             stim_rect = [center_x - s center_y - s center_x + s center_y + s];
+            % initialize audio
+            aud_target_fs = 44100;
             img_ptrs = [];
+            aud_data   = cell(length(stim_names), 1);
+            aud_fs     = zeros(length(stim_names), 1);  % per-clip sample rate
+            aud_bg_ptrs = zeros(length(stim_names), 1); % background image texture per audio clip
+            % preload scrambled images list for audio backgrounds
+            scrambled_dir = fullfile(stim_dir, 'scrambled');
+            scrambled_files = dir(fullfile(scrambled_dir, '*.jpg'));
+            n_scrambled = numel(scrambled_files);
             for ii = 1:length(stim_names)
-                if contains(stim_names{ii}, 'baseline')
+                if strcmpi(stim_names{ii}, 'baseline')
                     img_ptrs(ii) = 0;
                 else
                     [~, ~, ext] = fileparts(stim_names{ii});
@@ -168,15 +184,23 @@ classdef fLocSession
                     end
                     full_path = fullfile(stim_dir, cat_dir, stim_names{ii});
                     if ismember(lower(ext), {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'})
-                        img_name = stim_names{ii};
-                        if contains(img_name, '_oddball') && strcmpi(lower(ext), '.jpg')
-                            img_name = strrep(img_name, '_oddball', '');
-                        end
-                        full_path = fullfile(stim_dir, cat_dir, img_name);
+                        full_path = fullfile(stim_dir, cat_dir, stim_names{ii});
                         img = imread(full_path);
                         img_ptrs(ii) = Screen('MakeTexture', window_ptr, img);
                     elseif strcmpi(ext, '.mp4')
                         img_ptrs(ii) = -1;  % Flag as video
+                    elseif strcmpi(ext, '.wav')
+                        img_ptrs(ii) = -2;  % Flag as audio
+                        wav_path = fullfile(stim_dir, cat_dir, stim_names{ii});
+                        [y, fs] = audioread(wav_path);
+                        aud_data{ii} = y;   % samples x channels for audioplayer
+                        aud_fs(ii)   = fs;
+                        % load a random scrambled image as background
+                        if n_scrambled > 0
+                            rnd_file = scrambled_files(randi(n_scrambled)).name;
+                            bg_img = imread(fullfile(scrambled_dir, rnd_file));
+                            aud_bg_ptrs(ii) = Screen('MakeTexture', window_ptr, bg_img);
+                        end
                     else
                         warning('Unsupported stimulus type: %s', stim_names{ii});
                         img_ptrs(ii) = 0;
@@ -212,6 +236,12 @@ classdef fLocSession
             [cnt_time, rem_time] = deal(session.count_down + GetSecs);
             cnt = session.count_down;
             while rem_time > 0
+                % --- Escape key check ---
+                [~, ~, keyCode] = KbCheck(session.keyboard);
+                if keyCode(KbName('ESCAPE'))
+                    cleanup_run(img_ptrs, window_ptr);
+                    error('Experiment aborted by user (Escape key).');
+                end
                 if floor(rem_time) <= cnt
                     DrawFormattedText(window_ptr, num2str(cnt), 'center', 'center', tcol);
                     Screen('Flip', window_ptr);
@@ -220,57 +250,61 @@ classdef fLocSession
                 rem_time = cnt_time - GetSecs;
             end
 
+            % Warm up the GPU pipeline with a dummy draw+flip so the first
+            % stimulus flip has no extra latency
+            Screen('FillRect', window_ptr, bcol);
+            draw_fixation(window_ptr, center, fcol);
+            Screen('Flip', window_ptr);
+            WaitSecs(0.2);
+
             % main display loop
             start_time = GetSecs;
+            flip_log = nan(length(stim_names), 1);  % record actual flip time of each stimulus
             for ii = 1:length(stim_names)
-                if contains(stim_names{ii}, 'baseline')
+                % --- Escape key check ---
+                [~, ~, keyCode] = KbCheck(session.keyboard);
+                if keyCode(KbName('ESCAPE'))
+                    cleanup_run(img_ptrs, window_ptr);
+                    error('Experiment aborted by user (Escape key).');
+                end
+                if strcmpi(stim_names{ii}, 'baseline')
+                    t_onset = start_time + stim_onsets(ii);
                     Screen('FillRect', window_ptr, bcol);
                     draw_fixation(window_ptr, center, fcol);
-                    Screen('Flip', window_ptr);
-                    WaitSecs(stim_dur);
+                    flip_log(ii) = Screen('Flip', window_ptr, t_onset - ifi/2);
+                    WaitSecs('UntilTime', t_onset + sdc);
                     continue;
                 end
                 ii_press = []; ii_keys = [];
                 if img_ptrs(ii) == -1
                     stim_name = stim_names{ii};
-                    if contains(stim_name, '_oddball')
-                        [base, ext] = strtok(stim_name, '.');
-                        stim_name_for_loading = [erase(base, '_oddball') ext];
-                    else
-                        stim_name_for_loading = stim_name;
-                    end
                     video_durs_table = session.sequence.all_video_lengths;
-                    idx = find(video_durs_table.Filename == stim_name_for_loading);
+                    idx = find(video_durs_table.Filename == stim_name);
                     if ~any(idx)
-                        error('Video not found: %s', stim_name_for_loading);
+                        error('Video not found: %s', stim_name);
                     end
                     video_duration = video_durs_table.Duration_Secs(idx);
-                    dash_idx = strfind(stim_name_for_loading, '-');
+                    dash_idx = strfind(stim_name, '-');
                     if isempty(dash_idx)
-                        error('Unexpected video filename format: %s', stim_name_for_loading);
+                        error('Unexpected video filename format: %s', stim_name);
                     end
-                    video_cat_folder = stim_name_for_loading(1:dash_idx(1)-1);
-                    moviePath = fullfile(session.exp_dir, 'stimuli', video_cat_folder, stim_name_for_loading);
+                    video_cat_folder = stim_name(1:dash_idx(1)-1);
+                    moviePath = fullfile(session.exp_dir, 'stimuli', video_cat_folder, stim_name);
                     moviePtr = Screen('OpenMovie', window_ptr, moviePath);
                     Screen('PlayMovie', moviePtr, 1);
                     movieStart = GetSecs;
-                    [~, ~, ext_chk] = fileparts(stim_names{ii});
-                    isOddballVideo = contains(stim_names{ii}, '_oddball') && strcmpi(lower(ext_chk), '.mp4');
+                    isOddball = (run_task_probes(ii) == 1);
+                    fix_now = fcol;  % green by default
+                    if session.task_num == 3 && isOddball
+                        fix_now = oddball_fcol;  % red for oddball
+                    end
                     while (GetSecs - movieStart) < video_duration
                         tex = Screen('GetMovieImage', window_ptr, moviePtr, 1);
                         if tex <= 0
                             continue;
                         end
                         Screen('DrawTexture', window_ptr, tex, [], stim_rect);
-                        if session.task_num == 3
-                            % Oddball task: only draw red fixation on oddball videos
-                            if isOddballVideo
-                                draw_fixation(window_ptr, center, fcol);
-                            end
-                        else
-                            % 1-back / 2-back: always draw fixation on all videos
-                            draw_fixation(window_ptr, center, fcol);
-                        end
+                        draw_fixation(window_ptr, center, fix_now);
                         Screen('Flip', window_ptr);
                         Screen('Close', tex);
                     end
@@ -282,21 +316,52 @@ classdef fLocSession
                     Screen('Flip', window_ptr);
                     [keys, ie] = record_keys(GetSecs, session.sequence.video_isis(ii), k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
-                else
-                    Screen('DrawTexture', window_ptr, img_ptrs(ii), [], stim_rect);
-                    [~, ~, ext] = fileparts(stim_names{ii});
-                    isOddballImage = contains(stim_names{ii}, '_oddball') && strcmpi(lower(ext), '.jpg');
-                    draw_fixation(window_ptr, center, fcol, isOddballImage);
+                elseif img_ptrs(ii) == -2
+                    % Audio stimulus: show paired background image while playing
+                    isOddball = (run_task_probes(ii) == 1);
+                    aud_fix = fcol;  % green by default
+                    if session.task_num == 3 && isOddball
+                        aud_fix = oddball_fcol;  % red for oddball
+                    end
+                    Screen('FillRect', window_ptr, bcol);
+                    if aud_bg_ptrs(ii) > 0
+                        Screen('DrawTexture', window_ptr, aud_bg_ptrs(ii), [], stim_rect);
+                    end
+                    draw_fixation(window_ptr, center, aud_fix);
                     Screen('Flip', window_ptr);
-                    WaitSecs(stim_dur);
-                    [keys, ie] = record_keys(start_time + (ii - 1) * sdc, stim_dur, k);
+                    clip_dur = size(aud_data{ii}, 1) / aud_fs(ii);
+                    ap = audioplayer(aud_data{ii}, aud_fs(ii));
+                    aud_start = GetSecs;
+                    play(ap);
+                    [keys, ie] = record_keys(aud_start, clip_dur, k);
+                    stop(ap);
+                    ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                    aud_isi = session.sequence.audio_isis(ii);
+                    if aud_isi > 0
+                        Screen('FillRect', window_ptr, bcol);
+                        draw_fixation(window_ptr, center, fcol);
+                        Screen('Flip', window_ptr);
+                        [keys, ie] = record_keys(aud_start + clip_dur, aud_isi, k);
+                        ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                    end
+                else
+                    t_onset = start_time + stim_onsets(ii);
+                    Screen('DrawTexture', window_ptr, img_ptrs(ii), [], stim_rect);
+                    isOddball = (run_task_probes(ii) == 1);
+                    img_fix = fcol;
+                    if session.task_num == 3 && isOddball
+                        img_fix = oddball_fcol;
+                    end
+                    draw_fixation(window_ptr, center, img_fix);
+                    flip_log(ii) = Screen('Flip', window_ptr, t_onset - ifi/2);
+                    [keys, ie] = record_keys(t_onset, stim_dur, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                     if isi_dur > 0
                         Screen('FillRect', window_ptr, bcol);
                         draw_fixation(window_ptr, center, fcol);
-                        [keys, ie] = record_keys(start_time + (ii - 1) * sdc + stim_dur, isi_dur, k);
+                        Screen('Flip', window_ptr, t_onset + stim_dur - ifi/2);
+                        [keys, ie] = record_keys(t_onset + stim_dur, isi_dur, k);
                         ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
-                        Screen('Flip', window_ptr);
                     end
                 end
                 resp_keys{ii} = ii_keys;
@@ -304,6 +369,29 @@ classdef fLocSession
             end
             session.responses(run_num).keys = resp_keys;
             session.responses(run_num).press = resp_press;
+
+            % --- Block timing diagnostic ---
+            block_dur  = session.sequence.stim_per_block * sdc;
+            block_onsets_run = session.sequence.block_onsets(:, run_num);
+            fprintf('\n=== Run %d block timing (target = %.3f s) ===\n', run_num, block_dur);
+            for bb = 1:length(block_onsets_run)
+                t_block_start = start_time + block_onsets_run(bb);
+                t_block_end   = t_block_start + block_dur;
+                % find stimuli belonging to this block
+                in_block = (stim_onsets >= block_onsets_run(bb)) & ...
+                           (stim_onsets <  block_onsets_run(bb) + block_dur);
+                valid_flips = flip_log(in_block & ~isnan(flip_log));
+                if isempty(valid_flips)
+                    fprintf('  Block %2d (onset=%6.3fs): no image flips logged\n', bb, block_onsets_run(bb));
+                else
+                    actual_first = valid_flips(1)   - start_time;
+                    actual_last  = valid_flips(end)  - start_time;
+                    actual_dur   = (t_block_end) - valid_flips(1);
+                    fprintf('  Block %2d onset=%6.3fs | first flip=%6.3fs | last flip=%6.3fs | block dur=%.3fs\n', ...
+                        bb, block_onsets_run(bb), actual_first, actual_last, actual_dur);
+                end
+            end
+            fprintf('==========================================\n\n');
             fname = [session.id '_backup_run' num2str(run_num) '.mat'];
             fpath = fullfile(session.exp_dir, 'data', session.id, fname);
             save(fpath, 'resp_keys', 'resp_press', '-v7.3');
@@ -317,6 +405,11 @@ classdef fLocSession
             for i = 1:length(img_ptrs)
                 if img_ptrs(i) > 0
                     Screen('Close', img_ptrs(i));
+                end
+            end
+            for i = 1:length(aud_bg_ptrs)
+                if aud_bg_ptrs(i) > 0
+                    Screen('Close', aud_bg_ptrs(i));
                 end
             end
             Screen('FillRect', window_ptr, bcol);
@@ -405,6 +498,23 @@ classdef fLocSession
        
     end
 
+end
+
+function cleanup_run(img_ptrs, window_ptr)
+% CLEANUP_RUN  Close all textures and PTB screen gracefully.
+    try
+        for i = 1:length(img_ptrs)
+            if img_ptrs(i) > 0
+                Screen('Close', img_ptrs(i));
+            end
+        end
+    catch
+    end
+    try
+        ShowCursor;
+        Screen('CloseAll');
+    catch
+    end
 end
 
 
