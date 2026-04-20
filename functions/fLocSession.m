@@ -128,13 +128,14 @@ classdef fLocSession
         % register input devices 
         function session = find_inputs(session)
             laptop_key = get_keyboard_num;
-            button_key = laptop_key; % get_box_num; % Uncomment and implement get_box_num for MRI response box
-            if session.trigger == 1 && button_key ~= 0
+            button_key = get_box_num; % NNL scanner trigger (KeyWarrior8 Flex)
+            if button_key ~= 0
                 session.keyboard = laptop_key;
                 session.input = button_key;
             else
-                session.keyboard = button_key;
-                session.input = button_key;
+                warning('NNL trigger box not found — falling back to laptop keyboard for all input.');
+                session.keyboard = laptop_key;
+                session.input = laptop_key;
             end
             % MRI troubleshooting log
             fprintf('[MRI] Keyboard device: %d, Input device: %d\n', session.keyboard, session.input);
@@ -163,9 +164,10 @@ classdef fLocSession
             % initialize audio
             aud_target_fs = 44100;
             img_ptrs = [];
-            aud_data   = cell(length(stim_names), 1);
-            aud_fs     = zeros(length(stim_names), 1);  % per-clip sample rate
-            aud_bg_ptrs = zeros(length(stim_names), 1); % background image texture per audio clip
+            aud_data    = cell(length(stim_names), 1);
+            aud_fs      = zeros(length(stim_names), 1);  % per-clip sample rate
+            aud_players = cell(length(stim_names), 1);   % preloaded audioplayer handles
+            aud_bg_ptrs = zeros(length(stim_names), 1);  % background image texture per audio clip
             % preload scrambled images list for audio backgrounds
             scrambled_dir = fullfile(stim_dir, 'scrambled');
             scrambled_files = dir(fullfile(scrambled_dir, '*.jpg'));
@@ -195,6 +197,7 @@ classdef fLocSession
                         [y, fs] = audioread(wav_path);
                         aud_data{ii} = y;   % samples x channels for audioplayer
                         aud_fs(ii)   = fs;
+                        aud_players{ii} = audioplayer(y, fs);
                         % load a random scrambled image as background
                         if n_scrambled > 0
                             rnd_file = scrambled_files(randi(n_scrambled)).name;
@@ -214,7 +217,7 @@ classdef fLocSession
                 Screen('Flip', window_ptr);
                 DrawFormattedText(window_ptr, session.instructions, 'center', 'center', tcol);
                 Screen('Flip', window_ptr);
-                get_key('5', session.keyboard);
+                get_key('s', session.keyboard);
             elseif session.trigger == 1
                 Screen('FillRect', window_ptr, bcol);
                 Screen('Flip', window_ptr);
@@ -253,9 +256,19 @@ classdef fLocSession
             % Warm up the GPU pipeline with a dummy draw+flip so the first
             % stimulus flip has no extra latency
             Screen('FillRect', window_ptr, bcol);
-            draw_fixation(window_ptr, center, fcol);
             Screen('Flip', window_ptr);
             WaitSecs(0.2);
+
+            % Warm up audio output once so the first played clip is not truncated.
+            if any(~cellfun(@isempty, aud_players))
+                try
+                    warmup_tone = zeros(round(0.05 * aud_target_fs), 1);
+                    ap_warm = audioplayer(warmup_tone, aud_target_fs);
+                    playblocking(ap_warm);
+                catch ME
+                    warning('Audio warm-up failed: %s', ME.message);
+                end
+            end
 
             % main display loop
             start_time = GetSecs;
@@ -270,7 +283,6 @@ classdef fLocSession
                 if strcmpi(stim_names{ii}, 'baseline')
                     t_onset = start_time + stim_onsets(ii);
                     Screen('FillRect', window_ptr, bcol);
-                    draw_fixation(window_ptr, center, fcol);
                     flip_log(ii) = Screen('Flip', window_ptr, t_onset - ifi/2);
                     WaitSecs('UntilTime', t_onset + sdc);
                     continue;
@@ -294,71 +306,71 @@ classdef fLocSession
                     Screen('PlayMovie', moviePtr, 1);
                     movieStart = GetSecs;
                     isOddball = (run_task_probes(ii) == 1);
-                    fix_now = fcol;  % green by default
-                    if session.task_num == 3 && isOddball
-                        fix_now = oddball_fcol;  % red for oddball
-                    end
+                    draw_oddball_fix = (session.task_num == 3 && isOddball);
                     while (GetSecs - movieStart) < video_duration
                         tex = Screen('GetMovieImage', window_ptr, moviePtr, 1);
                         if tex <= 0
                             continue;
                         end
                         Screen('DrawTexture', window_ptr, tex, [], stim_rect);
-                        draw_fixation(window_ptr, center, fix_now);
+                        if draw_oddball_fix
+                            draw_fixation(window_ptr, center, oddball_fcol);
+                        end
                         Screen('Flip', window_ptr);
                         Screen('Close', tex);
                     end
                     Screen('PlayMovie', moviePtr, 0);
                     Screen('CloseMovie', moviePtr);
-                    % Show fixation during video ISI and record keys
+                    % Show fixation during video ISI — use absolute timing
+                    % anchored to movieStart so that movie cleanup overhead
+                    % is absorbed into the ISI, not added on top of it.
                     Screen('FillRect', window_ptr, bcol);
-                    draw_fixation(window_ptr, center, fcol);
                     Screen('Flip', window_ptr);
-                    [keys, ie] = record_keys(GetSecs, session.sequence.video_isis(ii), k);
+                    video_isi = session.sequence.video_isis(ii);
+                    isi_end = movieStart + video_duration + video_isi;
+                    [keys, ie] = record_keys(movieStart + video_duration, video_isi, k);
+                    WaitSecs('UntilTime', isi_end);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                 elseif img_ptrs(ii) == -2
                     % Audio stimulus: show paired background image while playing
                     isOddball = (run_task_probes(ii) == 1);
-                    aud_fix = fcol;  % green by default
-                    if session.task_num == 3 && isOddball
-                        aud_fix = oddball_fcol;  % red for oddball
-                    end
                     Screen('FillRect', window_ptr, bcol);
                     if aud_bg_ptrs(ii) > 0
                         Screen('DrawTexture', window_ptr, aud_bg_ptrs(ii), [], stim_rect);
                     end
-                    draw_fixation(window_ptr, center, aud_fix);
+                    if session.task_num == 3 && isOddball
+                        draw_fixation(window_ptr, center, oddball_fcol);
+                    end
                     Screen('Flip', window_ptr);
                     clip_dur = size(aud_data{ii}, 1) / aud_fs(ii);
-                    ap = audioplayer(aud_data{ii}, aud_fs(ii));
+                    ap = aud_players{ii};
                     aud_start = GetSecs;
-                    play(ap);
+                    play(ap, 1); % start from sample 1 (rewind + play)
+                    % Collect responses during clip.
+                    % Do NOT call stop(ap) — the ISI can be shorter than
+                    % the audio device startup latency, so stopping at
+                    % aud_start+clip_dur+aud_isi would cut off the tail.
+                    % audioplayer stops automatically when samples run out.
                     [keys, ie] = record_keys(aud_start, clip_dur, k);
-                    stop(ap);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                     aud_isi = session.sequence.audio_isis(ii);
-                    if aud_isi > 0
-                        Screen('FillRect', window_ptr, bcol);
-                        draw_fixation(window_ptr, center, fcol);
-                        Screen('Flip', window_ptr);
-                        [keys, ie] = record_keys(aud_start + clip_dur, aud_isi, k);
-                        ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
-                    end
+                    % ISI: flip to blank screen and collect responses
+                    Screen('FillRect', window_ptr, bcol);
+                    Screen('Flip', window_ptr);
+                    [keys, ie] = record_keys(aud_start + clip_dur, aud_isi, k);
+                    ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                 else
                     t_onset = start_time + stim_onsets(ii);
                     Screen('DrawTexture', window_ptr, img_ptrs(ii), [], stim_rect);
                     isOddball = (run_task_probes(ii) == 1);
-                    img_fix = fcol;
                     if session.task_num == 3 && isOddball
-                        img_fix = oddball_fcol;
+                        draw_fixation(window_ptr, center, oddball_fcol);
                     end
-                    draw_fixation(window_ptr, center, img_fix);
                     flip_log(ii) = Screen('Flip', window_ptr, t_onset - ifi/2);
                     [keys, ie] = record_keys(t_onset, stim_dur, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                     if isi_dur > 0
                         Screen('FillRect', window_ptr, bcol);
-                        draw_fixation(window_ptr, center, fcol);
                         Screen('Flip', window_ptr, t_onset + stim_dur - ifi/2);
                         [keys, ie] = record_keys(t_onset + stim_dur, isi_dur, k);
                         ii_keys = [ii_keys keys]; ii_press = [ii_press ie];

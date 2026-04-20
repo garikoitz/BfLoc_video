@@ -8,7 +8,8 @@ function b = get_box_num
 % Edited by AS 8/2014
 
 % Set the productID of your button box (update if it ever changes)
-box_id = 12314;
+% NNL (Nordic Neuro Labs) KeyWarrior8 Flex trigger: vendorID 0x07c0, productID 0x0101
+box_id = 257;
 
 % Initialize output
 b = 0;

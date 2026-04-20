@@ -9,9 +9,9 @@ center_x = center(1);
 center_y = center(2);
 
 % draw horizontal bar
-Screen('FillRect', windowPtr, color, [center_x - 3 center_y - 2 center_x + 3 center_y + 2]);
+Screen('FillRect', windowPtr, color, [center_x - 5 center_y - 3 center_x + 5 center_y + 3]);
 % draw vertical bar
-Screen('FillRect', windowPtr, color, [center_x - 2 center_y - 3 center_x + 2 center_y + 3]);
+Screen('FillRect', windowPtr, color, [center_x - 3 center_y - 5 center_x + 3 center_y + 5]);
 
 end
 
