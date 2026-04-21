@@ -137,14 +137,23 @@ classdef fLocSession
                 session.keyboard = laptop_key;
                 session.input = laptop_key;
             end
-            % MRI troubleshooting log
+            % Log all connected HID devices for troubleshooting
             fprintf('[MRI] Keyboard device: %d, Input device: %d\n', session.keyboard, session.input);
+            d = PsychHID('Devices');
+            fprintf('[MRI] All connected HID devices:\n');
+            for dd = 1:length(d)
+                fprintf('  [%2d] vendorID=%5d  productID=%5d  name="%s"\n', ...
+                    dd, d(dd).vendorID, d(dd).productID, d(dd).product);
+            end
         end
 
         % execute a run of the experiment
         function session = run_exp(session, run_num)
             % get timing information and initialize response containers
-            session = find_inputs(session); k = session.input;
+            session = find_inputs(session);
+            % k=-1 tells PTB to merge ALL connected keyboards/input devices into one
+            % stream, capturing button box, laptop keyboard, and any other HID device.
+            k = -1;  % all devices merged
             sdc = session.sequence.stim_duty_cycle;
             stim_dur = session.sequence.stim_dur;
             isi_dur = session.sequence.isi_dur;
@@ -273,6 +282,8 @@ classdef fLocSession
             % main display loop
             start_time = GetSecs;
             flip_log = nan(length(stim_names), 1);  % record actual flip time of each stimulus
+            % Timestamped keylog: one row per press — key name, absolute time, run-relative time, stimulus index, device
+            keylog = struct('key', {}, 'time_abs', {}, 'time_rel', {}, 'stim_idx', {}, 'device_id', {});
             for ii = 1:length(stim_names)
                 % --- Escape key check ---
                 [~, ~, keyCode] = KbCheck(session.keyboard);
@@ -307,6 +318,7 @@ classdef fLocSession
                     movieStart = GetSecs;
                     isOddball = (run_task_probes(ii) == 1);
                     draw_oddball_fix = (session.task_num == 3 && isOddball);
+                    last_key_down = false;  % debounce state for video keypresses
                     while (GetSecs - movieStart) < video_duration
                         tex = Screen('GetMovieImage', window_ptr, moviePtr, 1);
                         if tex <= 0
@@ -318,19 +330,30 @@ classdef fLocSession
                         end
                         Screen('Flip', window_ptr);
                         Screen('Close', tex);
+                        % Collect keypresses during video playback
+                        [key_is_down, t_press, key_code] = KbCheck(k);
+                        if key_is_down && ~last_key_down
+                            key_name = KbName(key_code);
+                            if iscell(key_name); key_name = strjoin(key_name, '+'); end
+                            ii_keys{end+1} = key_name; %#ok<AGROW>
+                            ii_press(end+1) = 0;        %#ok<AGROW> % mark as pressed
+                            keylog(end+1) = struct('key', key_name, 'time_abs', t_press, ...
+                                'time_rel', t_press - start_time, 'stim_idx', ii, 'device_id', k); %#ok<AGROW>
+                        end
+                        last_key_down = key_is_down;
                     end
                     Screen('PlayMovie', moviePtr, 0);
                     Screen('CloseMovie', moviePtr);
-                    % Show fixation during video ISI — use absolute timing
-                    % anchored to movieStart so that movie cleanup overhead
-                    % is absorbed into the ISI, not added on top of it.
                     Screen('FillRect', window_ptr, bcol);
                     Screen('Flip', window_ptr);
                     video_isi = session.sequence.video_isis(ii);
-                    isi_end = movieStart + video_duration + video_isi;
-                    [keys, ie] = record_keys(movieStart + video_duration, video_isi, k);
-                    WaitSecs('UntilTime', isi_end);
-                    ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                    if video_isi > 0
+                        isi_end = movieStart + video_duration + video_isi;
+                        [keys, ts, devs, ie] = record_keys_ts(movieStart + video_duration, video_isi, k);
+                        WaitSecs('UntilTime', isi_end);
+                        ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                        for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
+                    end
                 elseif img_ptrs(ii) == -2
                     % Audio stimulus: show paired background image while playing
                     isOddball = (run_task_probes(ii) == 1);
@@ -351,14 +374,16 @@ classdef fLocSession
                     % the audio device startup latency, so stopping at
                     % aud_start+clip_dur+aud_isi would cut off the tail.
                     % audioplayer stops automatically when samples run out.
-                    [keys, ie] = record_keys(aud_start, clip_dur, k);
+                    [keys, ts, devs, ie] = record_keys_ts(aud_start, clip_dur, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                    for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
                     aud_isi = session.sequence.audio_isis(ii);
                     % ISI: flip to blank screen and collect responses
                     Screen('FillRect', window_ptr, bcol);
                     Screen('Flip', window_ptr);
-                    [keys, ie] = record_keys(aud_start + clip_dur, aud_isi, k);
+                    [keys, ts, devs, ie] = record_keys_ts(aud_start + clip_dur, aud_isi, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                    for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
                 else
                     t_onset = start_time + stim_onsets(ii);
                     Screen('DrawTexture', window_ptr, img_ptrs(ii), [], stim_rect);
@@ -367,20 +392,32 @@ classdef fLocSession
                         draw_fixation(window_ptr, center, oddball_fcol);
                     end
                     flip_log(ii) = Screen('Flip', window_ptr, t_onset - ifi/2);
-                    [keys, ie] = record_keys(t_onset, stim_dur, k);
+                    [keys, ts, devs, ie] = record_keys_ts(t_onset, stim_dur, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                    for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
                     if isi_dur > 0
                         Screen('FillRect', window_ptr, bcol);
                         Screen('Flip', window_ptr, t_onset + stim_dur - ifi/2);
-                        [keys, ie] = record_keys(t_onset + stim_dur, isi_dur, k);
+                        [keys, ts, devs, ie] = record_keys_ts(t_onset + stim_dur, isi_dur, k);
                         ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
+                        for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
                     end
                 end
                 resp_keys{ii} = ii_keys;
-                resp_press(ii) = min(ii_press);
+                if isempty(ii_press)
+                    resp_press(ii) = 0;
+                else
+                    resp_press(ii) = min(ii_press);
+                end
             end
-            session.responses(run_num).keys = resp_keys;
-            session.responses(run_num).press = resp_press;
+            session.responses(run_num).keys   = resp_keys;
+            session.responses(run_num).press  = resp_press;
+            session.responses(run_num).keylog = keylog;  % timestamped log: key, time_abs, time_rel, stim_idx
+
+            % Save session immediately so responses are never lost if a later crash occurs
+            session_fname = [session.id '_fLocSession.mat'];
+            session_fpath = fullfile(session.exp_dir, 'data', session.id, session_fname);
+            save(session_fpath, 'session', '-v7.3');
 
             % --- Block timing diagnostic ---
             block_dur  = session.sequence.stim_per_block * sdc;
@@ -406,14 +443,14 @@ classdef fLocSession
             fprintf('==========================================\n\n');
             fname = [session.id '_backup_run' num2str(run_num) '.mat'];
             fpath = fullfile(session.exp_dir, 'data', session.id, fname);
-            save(fpath, 'resp_keys', 'resp_press', '-v7.3');
+            save(fpath, 'resp_keys', 'resp_press', 'keylog', '-v7.3');
             session = score_task(session, run_num);
-            num_probes = num2str(sum(session.sequence.task_probes(:, run_num)));
-            hit_cnt = num2str(session.hit_cnt(run_num));
-            fa_cnt = num2str(session.fa_cnt(run_num));
-            hit_rate = num2str(session.hit_rate(run_num) * 100);
-            hit_str = ['Hits: ' hit_cnt '/' num_probes ' (' hit_rate '%)'];
-            fa_str = ['False alarms: ' fa_cnt];
+            % num_probes = num2str(sum(session.sequence.task_probes(:, run_num)));
+            % hit_cnt = num2str(session.hit_cnt(run_num));
+            % fa_cnt = num2str(session.fa_cnt(run_num));
+            % hit_rate = num2str(session.hit_rate(run_num) * 100);
+            % hit_str = ['Hits: ' hit_cnt '/' num_probes ' (' hit_rate '%)'];
+            % fa_str = ['False alarms: ' fa_cnt];
             for i = 1:length(img_ptrs)
                 if img_ptrs(i) > 0
                     Screen('Close', img_ptrs(i));
@@ -426,8 +463,9 @@ classdef fLocSession
             end
             Screen('FillRect', window_ptr, bcol);
             Screen('Flip', window_ptr);
-            score_str = [hit_str '\n' fa_str];
-            DrawFormattedText(window_ptr, score_str, 'center', 'center', tcol);
+            % score_str = [hit_str '\n' fa_str];
+            % DrawFormattedText(window_ptr, score_str, 'center', 'center', tcol);
+            DrawFormattedText(window_ptr, 'Thanks, this is the end of this run', 'center', 'center', tcol);
             Screen('Flip', window_ptr);
             get_key('4', session.keyboard);
             ShowCursor;

@@ -90,6 +90,23 @@ session = fLocSession(name, trigger, stim_set, num_runs, task_num);
 session = load_seqs(session);
 %session.seq = make_runs(session.seq);  % <== This is the fix
 
+script_session_ID=sprintf("########### Session ID is %s ########### \n", session.id);
+disp(script_session_ID);
+% print the number of TR in the command to help checking the sequence
+seq=session.sequence;
+TR=2;
+onset_dur=seq.stim_dur+seq.isi_dur;
+num_of_stim=length(seq.stim_onsets);
+
+NORDIC_scans=1;
+dummy_scans=5;
+%counter down is in sec
+count_down=session.count_down; 
+num_of_TR=dummy_scans+count_down/TR-dummy_scans+round(num_of_stim/(TR/onset_dur))+NORDIC_scans;
+
+script_TR=sprintf("########### Total volumns for this experiment is %i ########### \n", num_of_TR);
+disp(script_TR);
+
 session_dir = (fullfile(session.exp_dir, 'data', session.id));
 if ~exist(session_dir, 'dir') == 7
     mkdir(session_dir);
@@ -109,7 +126,43 @@ write_event_tsv(session);
 
 end
 
+% CREATE TABLE TO CHECK LOGS AND ODDBALLS
+%{
+S = load('ss02_21-Apr-2026_Stimset1_oddball_2runs_fLocSession.mat');
 
+rr = 1;  % <-- change this to the run you want
+
+kl = S.session.responses(rr).keylog;
+
+if isempty(kl)
+    fprintf('No keypresses recorded in run %d.\n', rr);
+else
+    key             = {kl.key}';
+    time_rel        = [kl.time_rel]';
+    time_abs        = [kl.time_abs]';
+    stim_idx        = [kl.stim_idx]';
+    device_id       = [kl.device_id]';
+    stim_name       = S.session.sequence.stim_names(stim_idx, rr);
+    is_probe        = logical(S.session.sequence.task_probes(stim_idx, rr));
+    stim_onset_s    = S.session.sequence.stim_onsets(stim_idx, rr);
+    reaction_time_s = time_rel - stim_onset_s;
+
+    T = table(time_rel, stim_onset_s, reaction_time_s, key, ...
+              stim_idx, stim_name, is_probe, device_id, time_abs, ...
+        'VariableNames', {'Keypress_time_s', 'Stim_onset_s', 'Reaction_time_s', ...
+                          'Key', 'Stim_index', 'Stim_name', 'Is_oddball_probe', 'Device_id', 'Time_abs'});
+
+    disp(T);
+    fprintf('\nTotal keypresses:         %d\n', height(T));
+    fprintf('Hits (on probes):         %d\n', sum(T.Is_oddball_probe));
+    fprintf('False alarms (off probe): %d\n', sum(~T.Is_oddball_probe));
+    hits = T(T.Is_oddball_probe, :);
+    if ~isempty(hits)
+        fprintf('Mean RT on hits:          %.3f s\n', mean(hits.Reaction_time_s));
+    end
+end
+
+%}
 
 
 

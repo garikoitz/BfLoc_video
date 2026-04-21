@@ -21,15 +21,15 @@ classdef fLocSequence
     end
 
     properties (Constant)
-        stim_conds = {'English' 'Chinese' 'Audio' 'Images' 'Videos'};
+        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
         stim_per_block = 12;   % stimuli per block
         stim_duty_cycle = 0.5; % duration of stimulus duty cycle (s)
     end
 
     properties (Constant, Hidden)
         %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV' 'CH_AW'};
-        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV'};
-        stim_set2 = {'EN_SC' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
+        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
+        %stim_set2 = {'EN_SC'   'IMG_SC' 'LSE_SWV'};
         %stim_set3 = [stim_set1, stim_set2];
         % JP
         %stim_set1 = {'body' 'JP_word1' 'adult' 'JP_FF1' 'JP_CB1' 'Processed_Videos'};
@@ -40,7 +40,7 @@ classdef fLocSequence
         % ES
         % stim_set1 = {'body' 'JP_word1' 'adult' 'JP_FF1' 'JP_CB1'};
         % stim_set2 = {'limb' 'JP_word2' 'child' 'JP_CS1' 'JP_SC1'};
-        stim_per_set = 72;
+        stim_per_set = 80;
         task_names = {'1back' '2back' 'oddball'};
         task_freq = 0.5;
     end
@@ -91,7 +91,9 @@ classdef fLocSequence
         % get run duration given stimulus duty cycle
         function run_dur = get.run_dur(seq)
             block_dur = seq.stim_per_block * seq.stim_duty_cycle;
-            blocks_per_run = 1 + (1 + length(seq.stim_conds)) ^ 2 + 1;
+            blocks_per_cond = 6;
+            % Middle: (9 stim conds + baseline) * 6 each = 60; plus 1 baseline at start + 1 at end
+            blocks_per_run = 2 + (length(seq.stim_conds) + 1) * blocks_per_cond;
             run_dur = block_dur * blocks_per_run;
         end
 
@@ -161,13 +163,22 @@ classdef fLocSequence
             run_sets = seq.run_sets;
 
             % --- Get block conditions ---
-            block_conds = make_orders(num_conds, num_conds, num_runs);
-            block_conds = [zeros(1, num_runs); block_conds; zeros(1, num_runs)];
+            blocks_per_cond = 6;
+            n_stim_conds = num_conds - 1;  % = 9
+            % Include baseline (0) in the middle shuffle, as in original design:
+            %   (9 stim conds + 1 baseline) * 6 = 60 middle blocks, each appearing 6 times
+            conds_sequence = repmat(0:n_stim_conds, 1, blocks_per_cond);  % 0×60, each cond 6 times
+            block_conds_inner = zeros((n_stim_conds + 1) * blocks_per_cond, num_runs);
+            for rr = 1:num_runs
+                block_conds_inner(:, rr) = shuffle(conds_sequence)';
+            end
+            % Wrap with fixed baseline block at start and end
+            block_conds = [zeros(1, num_runs); block_conds_inner; zeros(1, num_runs)];
             block_dur = stim_per_block * seq.stim_duty_cycle;
             block_onsets = repmat(0:block_dur:seq.run_dur - block_dur, num_runs, 1)';
 
             % --- Build stim_mat: category for each stimulus position ---
-            stim_mat = cell(stim_per_block, num_conds^2 + 2, num_runs);
+            stim_mat = cell(stim_per_block, (n_stim_conds + 1) * blocks_per_cond + 2, num_runs);
             for rr = 1:num_runs
                 cat_list = ['baseline' run_sets(rr, :)];
                 cat_seq = cat_list(block_conds(:, rr) + 1);
@@ -208,13 +219,14 @@ classdef fLocSequence
             end
             stim_list = cellfun(@(X, Y) [X Y], stim_cat_list, stim_num_list_fixed, 'uni', false);
             % insert task probes in randomly-selected stimulus blocks
-            probes_per_run = floor(seq.task_freq * seq.num_conds ^ 2);
+            n_stim_blocks = n_stim_conds * blocks_per_cond;  % 9 * 6 = 54 (probes only in stimulus blocks)
+            probes_per_run = floor(seq.task_freq * n_stim_blocks);
             if seq.task_num == 2
                 probe_pos = randi(seq.stim_per_block - 3, [probes_per_run seq.num_runs]) + 2;
             else
                 probe_pos = randi(seq.stim_per_block - 2, [probes_per_run seq.num_runs ]) + 1;
             end
-            probe_stim_mat = zeros(seq.stim_per_block, seq.num_conds ^ 2 + 2, seq.num_runs);
+            probe_stim_mat = zeros(seq.stim_per_block, (n_stim_conds + 1) * blocks_per_cond + 2, seq.num_runs);
             for rr = 1:seq.num_runs
                 stim_block_idxs = shuffle(find(block_conds(:, rr) > 0));
                 xi = probe_pos(:, rr);
@@ -251,14 +263,8 @@ classdef fLocSequence
             task_probes = reshape(probe_stim_mat, [], seq.num_runs);
 
             flRP = seq.exp_dir;
-            % Determine which video folders to scan based on stim_set
-            if seq.stim_set == 1
-                video_folders = {'LSE_WV'};
-            elseif seq.stim_set == 2
-                video_folders = {'LSE_SWV'};
-            else  % stim_set == 3
-                video_folders = {'LSE_WV', 'LSE_SWV'};
-            end
+            % Always scan both video folders — stim_set1 contains both LSE_WV and LSE_SWV
+            video_folders = {'LSE_WV', 'LSE_SWV'};
             all_video_lengths = table();
             for vf = 1:numel(video_folders)
                 folder_path = fullfile(flRP, 'stimuli', video_folders{vf});
