@@ -1,18 +1,56 @@
 
 
-function runme(name, trigger, stim_set, num_runs, task_num, start_run)
+function runme(name, trigger, stim_set, num_runs, task_num, start_run, use_eyelink)
 %{ 
 Prompts experimenter for session parameters and executes functional
 localizer experiment used to define regions in high-level visual cortex
 selective to faces, places, bodies, and printed characters.
 
 Inputs (optional):
-  1) name -- session-specific identifier (e.g., particpant's initials)
-  2) trigger -- option to trigger scanner (0 = no, 1 = yes)
-  3) stim_set -- stimulus set (1 = standard, 2 = alternate, 3 = both)
-  4) num_runs -- number of runs (stimuli repeat after 2 runs/set)
-  5) task_num -- which task (1 = 1-back, 2 = 2-back, 3 = oddball)
-  6) start_run -- run number to begin with (if sequence is interrupted)
+  1) name       -- session-specific identifier string.
+                   REQUIRED FORMAT:  'XX_YY_sub-NN_ses-MM'
+                   where:
+                     XX    : short subject code (e.g. s1, s2, p1)
+                     YY    : short task/session label (e.g. t1, t2, od)
+                     sub-NN: BIDS subject ID  (e.g. sub-01, sub-ss02)
+                     ses-MM: BIDS session number (e.g. ses-01, ses-02)
+                   -------------------------------------------------------
+                   *** IMPORTANT — The first two tokens XX_YY are used as
+                   the EyeLink EDF filename on the Host PC (max 8 chars).
+                   They must:
+                     (a) be unique per subject+session combination so that
+                         EDF files from different sessions are never mixed up
+                     (b) match the sub-NN and ses-MM tokens in meaning
+                         (e.g. 's1_t1' should correspond to sub-01, ses-01)
+                     (c) together be exactly 5 characters long so that
+                         appending '_<run>' stays within the 8-char limit:
+                           XX_YY_<run>  ->  e.g. s1_t1_1  (7 chars ✓)
+                                                 s1_t1_10 (8 chars ✓)
+                   -------------------------------------------------------
+                   Examples:
+                     's1_t1_sub-01_ses-01'  -> subject 01, session 01, task 1
+                     's2_t2_sub-02_ses-02'  -> subject 02, session 02, task 2
+                     's2_od_sub-02_ses-03'  -> subject 02, session 03, oddball
+                   The full session ID written to disk is auto-built as:
+                     sub-NN_ses-MM_task-BfLocVideo<task>_<date>_Stimset<S>_<task>_<R>runs
+                     e.g. sub-01_ses-01_task-BfLocVideooddball_25-Apr-2026_Stimset1_oddball_2runs
+                   EyeLink EDF on Host PC (≤8 chars, auto-derived from XX_YY + run):
+                     s1_t1_1  (run 1),  s1_t1_2  (run 2), ...  s1_t1_10 (run 10)
+                   Example calls:
+                     runme('s1_t1_sub-01_ses-01', 0, 1, 2, 3)        %% no scanner, oddball
+                     runme('s1_t1_sub-01_ses-01', 1, 1, 2, 3, 1, 1)  %% scanner + EyeLink
+
+  2) trigger    -- option to trigger scanner (0 = no, 1 = yes)
+  3) stim_set   -- stimulus set (1 = standard, 2 = alternate, 3 = both)
+  4) num_runs   -- number of runs (stimuli repeat after 2 runs/set)
+  5) task_num   -- which task (1 = 1-back, 2 = 2-back, 3 = oddball)
+  6) start_run  -- run number to begin with (if sequence is interrupted)
+  7) use_eyelink -- use EyeLink eye-tracker? (0 = no [default], 1 = yes)
+                    When 1, calibration runs before the first scanner trigger.
+                    To adjust the calibration zoom (area proportion), edit
+                    session.el_calib_area after fLocSession() is created:
+                      session.el_calib_area = [0.477 0.678]; %% 1920x1080 projector
+                      session.el_calib_area = [0.715 0.715]; %% 1280x1024 iMac
 
 Run fLocMINI using this command: 
 runme('testgari03', 0, 1, 2, 1)
@@ -81,12 +119,19 @@ if nargin < 6
     start_run = 1;
 end
 
+% whether to use EyeLink eye-tracker
+if nargin < 7
+    use_eyelink = -1;
+    while ~ismember(use_eyelink, 0:1)
+        use_eyelink = input('Use EyeLink eye-tracker? (0 = no, 1 = yes) : ');
+    end
+end
 
 %% initialize session object and execute experiment
 
 
 % setup fLocSession and save session information
-session = fLocSession(name, trigger, stim_set, num_runs, task_num);
+session = fLocSession(name, trigger, stim_set, num_runs, task_num, use_eyelink);
 session = load_seqs(session);
 %session.seq = make_runs(session.seq);  % <== This is the fix
 

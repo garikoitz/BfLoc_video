@@ -24,6 +24,20 @@ classdef fLocSequence
         stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
         stim_per_block = 12;   % stimuli per block
         stim_duty_cycle = 0.5; % duration of stimulus duty cycle (s)
+        % Number of times each condition (including baseline) repeats per run.
+        %
+        % !! FOR DEBUGGING / TESTING ONLY !!
+        %   Set to 1 to produce short runs (one block per condition) so you
+        %   can verify timing, EyeLink messages, and response logging quickly
+        %   without sitting through a full experiment session.
+        %
+        %   IMPORTANT: restore to 6 before running real participants.
+        %   Also delete the cached _fLocSequence.mat in data/<session_id>/
+        %   after changing this value, otherwise the old sequence is reused.
+        %
+        %   blocks_per_cond = 1  ->  12 blocks/run  (~1.2 min)  [DEBUG]
+        %   blocks_per_cond = 6  ->  62 blocks/run  (~6.2 min)  [EXPERIMENT]
+        blocks_per_cond = 6;
     end
 
     properties (Constant, Hidden)
@@ -91,8 +105,8 @@ classdef fLocSequence
         % get run duration given stimulus duty cycle
         function run_dur = get.run_dur(seq)
             block_dur = seq.stim_per_block * seq.stim_duty_cycle;
-            blocks_per_cond = 6;
-            % Middle: (9 stim conds + baseline) * 6 each = 60; plus 1 baseline at start + 1 at end
+            blocks_per_cond = seq.blocks_per_cond;
+            % Middle: (9 stim conds + baseline) * blocks_per_cond each; plus 1 baseline at start + 1 at end
             blocks_per_run = 2 + (length(seq.stim_conds) + 1) * blocks_per_cond;
             run_dur = block_dur * blocks_per_run;
         end
@@ -163,10 +177,10 @@ classdef fLocSequence
             run_sets = seq.run_sets;
 
             % --- Get block conditions ---
-            blocks_per_cond = 6;
+            blocks_per_cond = seq.blocks_per_cond;
             n_stim_conds = num_conds - 1;  % = 9
             % Include baseline (0) in the middle shuffle, as in original design:
-            %   (9 stim conds + 1 baseline) * 6 = 60 middle blocks, each appearing 6 times
+            %   (9 stim conds + 1 baseline) * blocks_per_cond = middle blocks
             conds_sequence = repmat(0:n_stim_conds, 1, blocks_per_cond);  % 0×60, each cond 6 times
             block_conds_inner = zeros((n_stim_conds + 1) * blocks_per_cond, num_runs);
             for rr = 1:num_runs

@@ -12,6 +12,7 @@ classdef fLocSession
         responses % behavioral response data structure
         parfiles  % paths to vistasoft-compatible parfiles
         event     % paths to BIDS event.tsv files (added)
+        use_eyelink  % option to use EyeLink eye-tracker (0 = no, 1 = yes)
     end
 
     properties (Hidden)
@@ -21,6 +22,13 @@ classdef fLocSession
         keyboard  % device number of native computer keyboard
         hit_cnt   % number of hits per run
         fa_cnt    % number of false alarms per run
+        el            % EyelinkInitDefaults structure (colours, target settings)
+        edfFile       % EDF filename used on Host PC (max 8 chars, no extension)
+        dummymode     % 0 = real tracker connected, 1 = dummy/no hardware
+        el_calib_area % [x y] calibration area proportion — controls tracker zoom.
+                      %   [0.477 0.678] -> 1920x1080 projector (default)
+                      %   [0.715 0.715] -> 1280x1024 old iMac
+                      %   [1.0   1.0  ] -> full screen
     end
 
     properties (Constant)
@@ -51,9 +59,20 @@ classdef fLocSession
     methods
 
         % class constructor
-        function session = fLocSession(name, trigger, stim_set, num_runs, task_num)
+        function session = fLocSession(name, trigger, stim_set, num_runs, task_num, use_eyelink)
             session.name = deblank(name);
             session.trigger = trigger;
+            if nargin < 6
+                session.use_eyelink = 0;  % default: no eye-tracker
+            else
+                session.use_eyelink = use_eyelink;
+            end
+            % Calibration area proportion [x y]: change to control the zoom of
+            % the EyeLink calibration grid on the stimulus screen.
+            %   [0.477 0.678] -> 1920x1080 MRI projector
+            %   [0.715 0.715] -> 1280x1024 iMac
+            %   [1.0   1.0  ] -> full screen coverage
+            session.el_calib_area = [0.477 0.678];
             if nargin < 3
                 session.stim_set = 3;
             else
@@ -74,9 +93,15 @@ classdef fLocSession
             session.fa_cnt = zeros(1, session.num_runs);
         end
 
-        % get session-specific id string 
+        % get session-specific id string
+        % Expects session.name in the format: 'XX_YY_sub-NN_ses-NN'
+        %   e.g. 's2_t2_sub-02_ses-02'  ->  id starts with 'sub-02_ses-02_task-BfLocVideo_...'
+        % The first two underscore-separated tokens (XX_YY) are used as the
+        % short EDF filename on the Host PC (see init_eyelink.m).
         function id = get.id(session)
-            par_str = [session.name '_' session.date];
+            parts = split(session.name, '_');
+            % this is giving the name of the session under data dir 
+            par_str = [parts{3} '_' parts{4} '_task-BfLocVideo_' session.date];
             exp_str = ['Stimset' num2str(session.stim_set) '_' session.task_name '_' num2str(session.num_runs) 'runs'];
             id = [par_str '_' exp_str];
         end
@@ -166,7 +191,7 @@ classdef fLocSession
             run_task_probes = session.sequence.task_probes(:, run_num);
             resp_keys = {}; resp_press = zeros(length(stim_names), 1);
             % setup screen and load all stimuli in run
-            [window_ptr, center] = do_screen;
+            [window_ptr, rect, center, screen_num] = do_screen;
             ifi = Screen('GetFlipInterval', window_ptr); % inter-frame interval for scheduling
             center_x = center(1); center_y = center(2); s = session.stim_size / 2;
             stim_rect = [center_x - s center_y - s center_x + s center_y + s];
@@ -218,6 +243,18 @@ classdef fLocSession
                         img_ptrs(ii) = 0;
                     end
                 end
+            end
+
+            % --- EyeLink: initialize, calibrate, and start recording ---
+            % This block runs (and blocks for calibration) before scanner trigger.
+            % The current audio/video/image display logic is completely unchanged;
+            % EyeLink messages are fire-and-forget and never block PTB rendering.
+            if session.use_eyelink == 1
+                [session.el, session.dummymode, session.edfFile] = ...
+                    init_eyelink(session, run_num, window_ptr, rect, screen_num, session.el_calib_area);
+                Eyelink('SetOfflineMode');  % put tracker in idle before recording
+                Eyelink('StartRecording'); % begin eye-movement recording
+                WaitSecs(0.05);            % brief pause to ensure recording started
             end
 
             % start experiment triggering scanner if applicable
@@ -281,6 +318,9 @@ classdef fLocSession
 
             % main display loop
             start_time = GetSecs;
+            if session.use_eyelink == 1
+                Eyelink('Message', 'RUN_START run=%d session=%s', run_num, session.id);
+            end
             flip_log = nan(length(stim_names), 1);  % record actual flip time of each stimulus
             % Timestamped keylog: one row per press — key name, absolute time, run-relative time, stimulus index, device
             keylog = struct('key', {}, 'time_abs', {}, 'time_rel', {}, 'stim_idx', {}, 'device_id', {});
@@ -295,7 +335,15 @@ classdef fLocSession
                     t_onset = start_time + stim_onsets(ii);
                     Screen('FillRect', window_ptr, bcol);
                     flip_log(ii) = Screen('Flip', window_ptr, t_onset - ifi/2);
+                    if session.use_eyelink == 1
+                        Eyelink('Message', 'FIXATION_ONSET trial=%d time_ms=%d', ...
+                            ii, round((flip_log(ii) - start_time) * 1000));
+                    end
                     WaitSecs('UntilTime', t_onset + sdc);
+                    if session.use_eyelink == 1
+                        Eyelink('Message', 'FIXATION_OFFSET trial=%d time_ms=%d', ...
+                            ii, round((GetSecs - start_time) * 1000));
+                    end
                     continue;
                 end
                 ii_press = []; ii_keys = [];
@@ -316,6 +364,11 @@ classdef fLocSession
                     moviePtr = Screen('OpenMovie', window_ptr, moviePath);
                     Screen('PlayMovie', moviePtr, 1);
                     movieStart = GetSecs;
+                    if session.use_eyelink == 1
+                        Eyelink('Message', 'VIDEO_ONSET trial=%d/%d name=%s time_ms=%d', ...
+                            ii, length(stim_names), stim_names{ii}, ...
+                            round((movieStart - start_time) * 1000));
+                    end
                     isOddball = (run_task_probes(ii) == 1);
                     draw_oddball_fix = (session.task_num == 3 && isOddball);
                     last_key_down = false;  % debounce state for video keypresses
@@ -344,6 +397,11 @@ classdef fLocSession
                     end
                     Screen('PlayMovie', moviePtr, 0);
                     Screen('CloseMovie', moviePtr);
+                    if session.use_eyelink == 1
+                        Eyelink('Message', 'VIDEO_OFFSET trial=%d name=%s time_ms=%d', ...
+                            ii, stim_names{ii}, ...
+                            round((movieStart + video_duration - start_time) * 1000));
+                    end
                     Screen('FillRect', window_ptr, bcol);
                     Screen('Flip', window_ptr);
                     video_isi = session.sequence.video_isis(ii);
@@ -369,6 +427,11 @@ classdef fLocSession
                     ap = aud_players{ii};
                     aud_start = GetSecs;
                     play(ap, 1); % start from sample 1 (rewind + play)
+                    if session.use_eyelink == 1
+                        Eyelink('Message', 'AUDIO_ONSET trial=%d/%d name=%s time_ms=%d', ...
+                            ii, length(stim_names), stim_names{ii}, ...
+                            round((aud_start - start_time) * 1000));
+                    end
                     % Collect responses during clip.
                     % Do NOT call stop(ap) — the ISI can be shorter than
                     % the audio device startup latency, so stopping at
@@ -384,6 +447,11 @@ classdef fLocSession
                     [keys, ts, devs, ie] = record_keys_ts(aud_start + clip_dur, aud_isi, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                     for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
+                    if session.use_eyelink == 1
+                        Eyelink('Message', 'AUDIO_OFFSET trial=%d name=%s time_ms=%d', ...
+                            ii, stim_names{ii}, ...
+                            round((aud_start + clip_dur + aud_isi - start_time) * 1000));
+                    end
                 else
                     t_onset = start_time + stim_onsets(ii);
                     Screen('DrawTexture', window_ptr, img_ptrs(ii), [], stim_rect);
@@ -392,6 +460,11 @@ classdef fLocSession
                         draw_fixation(window_ptr, center, oddball_fcol);
                     end
                     flip_log(ii) = Screen('Flip', window_ptr, t_onset - ifi/2);
+                    if session.use_eyelink == 1
+                        Eyelink('Message', 'IMAGE_ONSET trial=%d/%d name=%s time_ms=%d', ...
+                            ii, length(stim_names), stim_names{ii}, ...
+                            round((flip_log(ii) - start_time) * 1000));
+                    end
                     [keys, ts, devs, ie] = record_keys_ts(t_onset, stim_dur, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                     for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
@@ -402,6 +475,11 @@ classdef fLocSession
                         ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                         for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
                     end
+                    if session.use_eyelink == 1
+                        Eyelink('Message', 'IMAGE_OFFSET trial=%d name=%s time_ms=%d', ...
+                            ii, stim_names{ii}, ...
+                            round((t_onset + stim_dur - start_time) * 1000));
+                    end
                 end
                 resp_keys{ii} = ii_keys;
                 if isempty(ii_press)
@@ -410,6 +488,31 @@ classdef fLocSession
                     resp_press(ii) = min(ii_press);
                 end
             end
+            % --- EyeLink: stop recording, close EDF, transfer to display PC ---
+            if session.use_eyelink == 1
+                Eyelink('Message', 'RUN_END run=%d', run_num);
+                Eyelink('StopRecording');
+                Eyelink('SetOfflineMode');
+                Eyelink('Command', 'clear_screen 0'); % clear Host PC backdrop
+                WaitSecs(0.5);                        % allow buffer to flush
+                Eyelink('CloseFile');                 % close EDF on Host PC
+
+                % Stop and delete all audioplayer objects before EDF transfer.
+                % audioplayer uses Java audio threads; if left running they corrupt
+                % the heap inside the EyeLink MEX receive_data_file_feedback()
+                % callback, causing abort(). Clearing them joins those threads first.
+                for ii_ap = 1:length(aud_players)
+                    if ~isempty(aud_players{ii_ap})
+                        try; stop(aud_players{ii_ap}); catch; end
+                    end
+                end
+                aud_players = {};
+                clear aud_players;
+                WaitSecs(0.2); % allow Java audio threads to fully terminate
+
+                transferFile(session, window_ptr, rect(4));
+            end
+
             session.responses(run_num).keys   = resp_keys;
             session.responses(run_num).press  = resp_press;
             session.responses(run_num).keylog = keylog;  % timestamped log: key, time_abs, time_rel, stim_idx
@@ -445,12 +548,6 @@ classdef fLocSession
             fpath = fullfile(session.exp_dir, 'data', session.id, fname);
             save(fpath, 'resp_keys', 'resp_press', 'keylog', '-v7.3');
             session = score_task(session, run_num);
-            % num_probes = num2str(sum(session.sequence.task_probes(:, run_num)));
-            % hit_cnt = num2str(session.hit_cnt(run_num));
-            % fa_cnt = num2str(session.fa_cnt(run_num));
-            % hit_rate = num2str(session.hit_rate(run_num) * 100);
-            % hit_str = ['Hits: ' hit_cnt '/' num_probes ' (' hit_rate '%)'];
-            % fa_str = ['False alarms: ' fa_cnt];
             for i = 1:length(img_ptrs)
                 if img_ptrs(i) > 0
                     Screen('Close', img_ptrs(i));
@@ -463,8 +560,6 @@ classdef fLocSession
             end
             Screen('FillRect', window_ptr, bcol);
             Screen('Flip', window_ptr);
-            % score_str = [hit_str '\n' fa_str];
-            % DrawFormattedText(window_ptr, score_str, 'center', 'center', tcol);
             DrawFormattedText(window_ptr, 'Thanks, this is the end of this run', 'center', 'center', tcol);
             Screen('Flip', window_ptr);
             get_key('4', session.keyboard);
@@ -493,13 +588,22 @@ classdef fLocSession
         function session = write_parfiles(session)
             session.parfiles = cell(1, session.num_runs);
             conds = ['Baseline' session.sequence.stim_conds];
-            cols = {[1 1 1] [0 0 1] [0 0 0] [1 0 0] [.8 .8 0] [0 1 0] [0.5 0.5 0.5]};
+            % Auto-generate one distinct color per condition using HSV colormap
+            % so we never run out regardless of how many stim_conds exist.
+            num_conds = length(conds);
+            base_cols = {[1 1 1] [0 0 1] [0 0 0] [1 0 0] [.8 .8 0] [0 1 0] [0.5 0.5 0.5]};
+            if num_conds <= length(base_cols)
+                cols = base_cols(1:num_conds);
+            else
+                hsv_cols = hsv(num_conds);
+                cols = cell(1, num_conds);
+                for cc = 1:num_conds
+                    cols{cc} = hsv_cols(cc, :);
+                end
+            end
             for rr = 1:session.num_runs
                 block_onsets = session.sequence.block_onsets(:, rr);
                 block_conds = session.sequence.block_conds(:, rr);
-                if max(block_conds + 1) > length(cols)
-                    error('block_conds index exceeds number of defined condition colors.');
-                end
                 cond_names = conds(block_conds + 1);
                 cond_cols = cols(block_conds + 1);
                 fname = [session.id '_fLoc_run' num2str(rr) '.par'];
@@ -542,6 +646,43 @@ classdef fLocSession
                 end
                 fclose(fid);
                 session.event{rr} = fpath;
+            end
+        end
+
+        % Transfer EDF file from EyeLink Host PC to the Display PC.
+        % Transfer EDF file from EyeLink Host PC to the Display PC.
+        % Must be called with the PTB window still open — the EyeLink MEX
+        % progress callback (receive_data_file_feedback) uses el.window
+        % internally and requires a valid open PTB window.
+        function transferFile(session, window, height)
+            try
+                if session.dummymode == 0   % connected to real EyeLink
+                    Screen('FillRect', window, session.el.backgroundcolour);
+                    Screen('DrawText', window, 'Receiving data file...', 5, height - 35, 0);
+                    Screen('Flip', window);
+                    fprintf('Receiving data file ''%s.edf''\n', session.edfFile);
+
+                    dst_dir = fullfile(session.exp_dir, 'data', session.id);
+                    if ~exist(dst_dir, 'dir'); mkdir(dst_dir); end
+                    newName = [session.edfFile, '_', ...
+                        char(datetime('now', 'TimeZone', 'local', 'Format', 'yyyy-MM-dd_HH-mm')), ...
+                        '.edf'];
+                    fullDest = fullfile(dst_dir, newName);
+                    fprintf('[EDF] Host PC filename : ''%s.edf''\n', session.edfFile);
+                    fprintf('[EDF] Destination path : ''%s''\n', fullDest);
+                    fprintf('[EDF] Calling Eyelink(''ReceiveFile'', [], dest, 0) ...\n');
+                    status = Eyelink('ReceiveFile', [], fullDest, 0);
+                    fprintf('[EDF] ReceiveFile returned status = %d\n', status);
+                    if status > 0
+                        fprintf('[EDF] EDF file size: %.1f KB\n', status / 1024);
+                    end
+                    fprintf('Data file ''%s'' can be found in ''%s''\n', newName, dst_dir);
+                else
+                    fprintf('No EDF file saved in Dummy mode\n');
+                end
+            catch ME
+                fprintf('Problem receiving data file ''%s'': %s\n', session.edfFile, ME.message);
+                psychrethrow(psychlasterror);
             end
         end
 
