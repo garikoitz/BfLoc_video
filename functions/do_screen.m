@@ -2,7 +2,7 @@
 % use this function for the stimuli display on VGA screen at the MRI
 % room
 
-function [w, center] = doScreen
+function [w, rect, center, screen_num] = doScreen
     % Avoid sync test failure during development
     Screen('Preference', 'SkipSyncTests', 1);
     Screen('Preference', 'VisualDebugLevel', 0);
