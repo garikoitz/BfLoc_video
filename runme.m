@@ -10,10 +10,10 @@ Inputs (optional):
   1) name       -- session-specific identifier string.
                    REQUIRED FORMAT:  'XX_YY_sub-NN_ses-MM'
                    where:
-                     XX    : short subject code (e.g. s1, s2, p1)
-                     YY    : short task/session label (e.g. t1, t2, od)
-                     sub-NN: BIDS subject ID  (e.g. sub-01, sub-ss02)
-                     ses-MM: BIDS session number (e.g. ses-01, ses-02)
+                     XX    : short subject code (e.g. s1)
+                     YY    : short session label (e.g. t1)
+                     sub-NN: BIDS subject ID  (e.g. sub-01)
+                     ses-MM: BIDS session number (e.g. ses-01)
                    -------------------------------------------------------
                    *** IMPORTANT — The first two tokens XX_YY are used as
                    the EyeLink EDF filename on the Host PC (max 8 chars).
@@ -28,12 +28,11 @@ Inputs (optional):
                                                  s1_t1_10 (8 chars ✓)
                    -------------------------------------------------------
                    Examples:
-                     's1_t1_sub-01_ses-01'  -> subject 01, session 01, task 1
-                     's2_t2_sub-02_ses-02'  -> subject 02, session 02, task 2
-                     's2_od_sub-02_ses-03'  -> subject 02, session 03, oddball
+                     's1_t1_sub-01_ses-01'  -> subject 01, session 01, test 1
+
                    The full session ID written to disk is auto-built as:
-                     sub-NN_ses-MM_task-BfLocVideo<task>_<date>_Stimset<S>_<task>_<R>runs
-                     e.g. sub-01_ses-01_task-BfLocVideooddball_25-Apr-2026_Stimset1_oddball_2runs
+                     sub-NN_ses-MM_task-BfLocVideo_<date>_Stimset<S>_<task>_<R>runs
+                     e.g. sub-01_ses-01_task-BfLocVideo_oddball_25-Apr-2026_Stimset1_oddball_2runs
                    EyeLink EDF on Host PC (≤8 chars, auto-derived from XX_YY + run):
                      s1_t1_1  (run 1),  s1_t1_2  (run 2), ...  s1_t1_10 (run 10)
                    Example calls:
