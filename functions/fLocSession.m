@@ -1,6 +1,3 @@
-
-
-
 classdef fLocSession
 
     properties
@@ -143,6 +140,40 @@ classdef fLocSession
                 end
                 seq = edit_videos(seq);
                 seq = edit_audios(seq);
+
+                % --- Reassign stimulus numbers for video/audio categories after trimming ---
+                % OLD BEHAVIOUR: make_runs() assigned stimulus numbers BEFORE edit_videos /
+                % edit_audios ran. Those functions trim each 12-slot block down to 6 clips
+                % chosen by duration fit (not randomly), so some stimuli were systematically
+                % never shown even though they received a slot number.
+                %
+                % FIX: reassign fresh numbers here, AFTER trimming, so every surviving slot
+                % draws from a fair cycling randperm across all stim_per_set stimuli.
+                all_names = seq.stim_names(:);
+                is_media  = ~cellfun(@isempty, regexp(all_names, '\.(mp4|wav)$', 'ignorecase'));
+                media_idxs = find(is_media);
+                if ~isempty(media_idxs)
+                    % Extract category (everything before the first '-') for each media slot
+                    cats_in_media = cellfun(@(n) n(1 : strfind(n,'-') - 1), ...
+                                            all_names(media_idxs), 'UniformOutput', false);
+                    unique_media_cats = unique(cats_in_media);
+                    for mc = 1:numel(unique_media_cats)
+                        cat          = unique_media_cats{mc};
+                        cat_slot_idxs = media_idxs(strcmp(cats_in_media, cat));
+                        n_cat        = numel(cat_slot_idxs);
+                        [~, ~, ext]  = fileparts(all_names{cat_slot_idxs(1)});  % '.mp4' or '.wav'
+                        % Cycle through randperm to assign non-repeated numbers fairly
+                        n_cycles = ceil(n_cat / seq.stim_per_set);
+                        new_nums = repmat(randperm(seq.stim_per_set), 1, n_cycles);
+                        new_nums = new_nums(1:n_cat);
+                        for kk = 1:n_cat
+                            all_names{cat_slot_idxs(kk)} = sprintf('%s-%d%s', cat, new_nums(kk), ext);
+                        end
+                    end
+                    seq.stim_names = reshape(all_names, size(seq.stim_names));
+                end
+                % --- End reassignment ---
+
                 save(fpath, 'seq', '-v7.3');
             else
                 load(fpath);

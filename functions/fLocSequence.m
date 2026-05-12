@@ -209,7 +209,11 @@ classdef fLocSequence
                 if n_cat <= seq.stim_per_set
                     stim_nums = randperm(seq.stim_per_set, n_cat);
                 else
-                    stim_nums = [randperm(seq.stim_per_set), randsample(seq.stim_per_set, n_cat - seq.stim_per_set, true)'];
+                    % OLD: stim_nums = [randperm(seq.stim_per_set), randsample(seq.stim_per_set, n_cat - seq.stim_per_set, true)'];
+                    % Generate by cycling through randperm to avoid repetitions
+                    n_cycles = ceil(n_cat / seq.stim_per_set);
+                    stim_nums = repmat(randperm(seq.stim_per_set), 1, n_cycles);
+                    stim_nums = stim_nums(1:n_cat);
                     
                 end
                 stim_num_list(cat_idxs) = num2cell(stim_nums(:));

@@ -37,9 +37,10 @@ Inputs (optional):
                      s1_t1_1  (run 1),  s1_t1_2  (run 2), ...  s1_t1_10 (run 10)
                    Example calls:
                      runme('s1_t1_sub-01_ses-01', 0, 1, 2, 3)        %% no scanner, oddball
-                     runme('s1_t1_sub-01_ses-01', 1, 1, 2, 3, 1, 1)  %% scanner + EyeLink
-
+                  
   2) trigger    -- option to trigger scanner (0 = no, 1 = yes)
+     NOTE: In BCBL MRI scanner, the trigger should always be 0.
+  
   3) stim_set   -- stimulus set (1 = standard, 2 = alternate, 3 = both)
   4) num_runs   -- number of runs (stimuli repeat after 2 runs/set)
   5) task_num   -- which task (1 = 1-back, 2 = 2-back, 3 = oddball)
@@ -50,13 +51,9 @@ Inputs (optional):
                     session.el_calib_area after fLocSession() is created:
                       session.el_calib_area = [0.477 0.678]; %% 1920x1080 projector
                       session.el_calib_area = [0.715 0.715]; %% 1280x1024 iMac
+TO run the experiment, go with this sample command 
 
-Run fLocMINI using this command: 
-runme('testgari03', 0, 1, 2, 1)
-
-
-5
-
+runme('s1_s1_sub-01_ses-01_test-01', 0, 1, 2, 3, 0)
 
 
 # To end the process: 
