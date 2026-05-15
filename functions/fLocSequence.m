@@ -35,9 +35,10 @@ classdef fLocSequence
         %   Also delete the cached _fLocSequence.mat in data/<session_id>/
         %   after changing this value, otherwise the old sequence is reused.
         %
-        %   blocks_per_cond = 1  ->  12 blocks/run  (~1.2 min)  [DEBUG]
-        %   blocks_per_cond = 6  ->  62 blocks/run  (~6.2 min)  [EXPERIMENT]
+        %   blocks_per_cond = 1  ->  20 blocks/run  (~2.0 min)  [DEBUG]
+        %   blocks_per_cond = 6  ->  70 blocks/run  (~7.0 min)  [EXPERIMENT]
         blocks_per_cond = 6;
+        baseline_blocks_per_cond = 8; % baseline blocks in the middle shuffle (stim conditions each get blocks_per_cond)
     end
 
     properties (Constant, Hidden)
@@ -106,8 +107,8 @@ classdef fLocSequence
         function run_dur = get.run_dur(seq)
             block_dur = seq.stim_per_block * seq.stim_duty_cycle;
             blocks_per_cond = seq.blocks_per_cond;
-            % Middle: (10 stim conds + baseline) * blocks_per_cond each; plus 1 baseline at start + 1 at end
-            blocks_per_run = 2 + (length(seq.stim_conds) + 1) * blocks_per_cond;
+            % Middle: 10 stim conds × blocks_per_cond + baseline_blocks_per_cond; plus 1 fixed baseline at start + 1 at end
+            blocks_per_run = 2 + seq.baseline_blocks_per_cond + length(seq.stim_conds) * blocks_per_cond;
             run_dur = block_dur * blocks_per_run;
         end
 
@@ -178,11 +179,12 @@ classdef fLocSequence
 
             % --- Get block conditions ---
             blocks_per_cond = seq.blocks_per_cond;
+            baseline_bpc    = seq.baseline_blocks_per_cond;
             n_stim_conds = num_conds - 1;  % = 10
-            % Include baseline (0) in the middle shuffle, as in original design:
-            %   (9 stim conds + 1 baseline) * blocks_per_cond = middle blocks
-            conds_sequence = repmat(0:n_stim_conds, 1, blocks_per_cond);  % 0×60, each cond 6 times
-            block_conds_inner = zeros((n_stim_conds + 1) * blocks_per_cond, num_runs);
+            % Stim conditions (1–10) each appear blocks_per_cond times; baseline (0) appears baseline_bpc times
+            conds_sequence = [zeros(1, baseline_bpc), repmat(1:n_stim_conds, 1, blocks_per_cond)];
+            n_inner = baseline_bpc + n_stim_conds * blocks_per_cond;
+            block_conds_inner = zeros(n_inner, num_runs);
             for rr = 1:num_runs
                 block_conds_inner(:, rr) = shuffle(conds_sequence)';
             end
@@ -192,7 +194,7 @@ classdef fLocSequence
             block_onsets = repmat(0:block_dur:seq.run_dur - block_dur, num_runs, 1)';
 
             % --- Build stim_mat: category for each stimulus position ---
-            stim_mat = cell(stim_per_block, (n_stim_conds + 1) * blocks_per_cond + 2, num_runs);
+            stim_mat = cell(stim_per_block, n_inner + 2, num_runs);
             for rr = 1:num_runs
                 cat_list = ['baseline' run_sets(rr, :)];
                 cat_seq = cat_list(block_conds(:, rr) + 1);
@@ -244,7 +246,7 @@ classdef fLocSequence
             else
                 probe_pos = randi(seq.stim_per_block - 2, [probes_per_run seq.num_runs ]) + 1;
             end
-            probe_stim_mat = zeros(seq.stim_per_block, (n_stim_conds + 1) * blocks_per_cond + 2, seq.num_runs);
+            probe_stim_mat = zeros(seq.stim_per_block, n_inner + 2, seq.num_runs);
             for rr = 1:seq.num_runs
                 stim_block_idxs = shuffle(find(block_conds(:, rr) > 0));
                 xi = probe_pos(:, rr);
