@@ -148,6 +148,13 @@ num_of_TR=dummy_scans+count_down/TR-dummy_scans+round(num_of_stim/(TR/onset_dur)
 script_TR=sprintf("########### Total volumns for this experiment is %i ########### \n", num_of_TR);
 disp(script_TR);
 
+run_dur_s      = seq.run_dur;                              % stimulus period per run (s)
+run_total_s    = run_dur_s + count_down;                   % including countdown
+all_runs_s     = num_runs * run_total_s;                   % all runs combined
+script_time = sprintf("########### Run duration: %.0f s (%.1f min) | All %d runs: %.0f s (%.1f min) ########### \n", ...
+    run_total_s, run_total_s/60, num_runs, all_runs_s, all_runs_s/60);
+disp(script_time);
+
 session_dir = (fullfile(session.exp_dir, 'data', session.id));
 if ~exist(session_dir, 'dir') == 7
     mkdir(session_dir);
