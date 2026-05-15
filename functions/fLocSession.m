@@ -650,30 +650,45 @@ classdef fLocSession
             end
         end
 
-         % write vistasoft-compatible event.tsv file for each run
+        % write BIDS-compatible events.tsv file for each run
         function session = write_event_tsv(session)
-            disp('Start writing vistasoft-compatible event.tsv files');
+            disp('Writing BIDS-compatible events.tsv files');
             session.event = cell(1, session.num_runs);
 
-            % Define condition/category names and block duration
-            conds = ['Baseline' session.sequence.stim_conds];
-            stim_cat = ['baseline' session.sequence.stim_set1];
             duration = session.sequence.stim_per_block * session.sequence.stim_duty_cycle;
+
+            % build BIDS filename prefix from name parts: XX_YY_sub-NN_ses-NN -> sub-NN_ses-NN_task-BfLocVideo
+            name_parts = split(session.name, '_');
+            bids_prefix = [name_parts{3} '_' name_parts{4} '_task-BfLocVideo'];
+
+            out_dir = fullfile(session.exp_dir, 'data', session.id);
+            if ~exist(out_dir, 'dir'); mkdir(out_dir); end
 
             for rr = 1:session.num_runs
                 block_onsets = session.sequence.block_onsets(:, rr);
-                block_conds = session.sequence.block_conds(:, rr);
-                cond_names = stim_cat(block_conds + 1);
+                stim_onsets  = session.sequence.stim_onsets(:, rr);
+                stim_names   = session.sequence.stim_names(:, rr);
 
-                % Create a filename using session id and run number
-                parts_id = split(session.id, '_');
-                fname = [parts_id{1} '_' parts_id{2} '_' parts_id{3} '_run-' num2str(rr, '%02d') '_events.tsv'];
-                fpath = fullfile(session.exp_dir, 'data', session.id, fname);
+                fname = [bids_prefix '_run-' num2str(rr, '%02d') '_events.tsv'];
+                fpath = fullfile(out_dir, fname);
 
                 fid = fopen(fpath, 'w');
                 fprintf(fid, 'onset\tduration\ttrial_type\n');
                 for bb = 1:length(block_onsets)
-                    fprintf(fid, '%.2f\t%d\t%s\n', block_onsets(bb), duration, cond_names{bb});
+                    % find the first stimulus whose onset matches this block start
+                    idx = find(abs(stim_onsets - block_onsets(bb)) < 0.01, 1, 'first');
+                    if isempty(idx)
+                        trial_type = 'baseline';
+                    else
+                        stim_name = stim_names{idx};
+                        dash_pos  = strfind(stim_name, '-');
+                        if isempty(dash_pos)
+                            trial_type = 'baseline';
+                        else
+                            trial_type = stim_name(1:dash_pos(1)-1);
+                        end
+                    end
+                    fprintf(fid, '%.2f\t%.2f\t%s\n', block_onsets(bb), duration, trial_type);
                 end
                 fclose(fid);
                 session.event{rr} = fpath;
