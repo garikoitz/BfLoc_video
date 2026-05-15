@@ -21,7 +21,7 @@ classdef fLocSequence
     end
 
     properties (Constant)
-        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV' 'CH_FF'};
+        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'EN_FF' 'LSE_SWV' 'CH_FF'};
         stim_per_block = 12;   % stimuli per block
         stim_duty_cycle = 0.5; % duration of stimulus duty cycle (s)
         % Number of times each condition (including baseline) repeats per run.
@@ -42,8 +42,8 @@ classdef fLocSequence
 
     properties (Constant, Hidden)
         %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV' 'CH_AW'};
-        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV' 'CH_FF'};
-        %stim_set2 = {'EN_SC'   'IMG_SC' 'LSE_SWV'};
+        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'EN_FF' 'LSE_SWV' 'CH_FF'};
+        %stim_set2 = {'EN_SC'   'EN_FF' 'LSE_SWV'};
         %stim_set3 = [stim_set1, stim_set2];
         % JP
         %stim_set1 = {'body' 'JP_word1' 'adult' 'JP_FF1' 'JP_CB1' 'Processed_Videos'};
