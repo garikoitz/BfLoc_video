@@ -21,7 +21,7 @@ classdef fLocSequence
     end
 
     properties (Constant)
-        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
+        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV' 'CH_FF'};
         stim_per_block = 12;   % stimuli per block
         stim_duty_cycle = 0.5; % duration of stimulus duty cycle (s)
         % Number of times each condition (including baseline) repeats per run.
@@ -42,7 +42,7 @@ classdef fLocSequence
 
     properties (Constant, Hidden)
         %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV' 'CH_AW'};
-        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
+        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV' 'CH_FF'};
         %stim_set2 = {'EN_SC'   'IMG_SC' 'LSE_SWV'};
         %stim_set3 = [stim_set1, stim_set2];
         % JP
@@ -106,7 +106,7 @@ classdef fLocSequence
         function run_dur = get.run_dur(seq)
             block_dur = seq.stim_per_block * seq.stim_duty_cycle;
             blocks_per_cond = seq.blocks_per_cond;
-            % Middle: (9 stim conds + baseline) * blocks_per_cond each; plus 1 baseline at start + 1 at end
+            % Middle: (10 stim conds + baseline) * blocks_per_cond each; plus 1 baseline at start + 1 at end
             blocks_per_run = 2 + (length(seq.stim_conds) + 1) * blocks_per_cond;
             run_dur = block_dur * blocks_per_run;
         end
@@ -178,7 +178,7 @@ classdef fLocSequence
 
             % --- Get block conditions ---
             blocks_per_cond = seq.blocks_per_cond;
-            n_stim_conds = num_conds - 1;  % = 9
+            n_stim_conds = num_conds - 1;  % = 10
             % Include baseline (0) in the middle shuffle, as in original design:
             %   (9 stim conds + 1 baseline) * blocks_per_cond = middle blocks
             conds_sequence = repmat(0:n_stim_conds, 1, blocks_per_cond);  % 0×60, each cond 6 times
@@ -237,7 +237,7 @@ classdef fLocSequence
             end
             stim_list = cellfun(@(X, Y) [X Y], stim_cat_list, stim_num_list_fixed, 'uni', false);
             % insert task probes in randomly-selected stimulus blocks
-            n_stim_blocks = n_stim_conds * blocks_per_cond;  % 9 * 6 = 54 (probes only in stimulus blocks)
+            n_stim_blocks = n_stim_conds * blocks_per_cond;  % 10 * 6 = 60 (probes only in stimulus blocks)
             probes_per_run = floor(seq.task_freq * n_stim_blocks);
             if seq.task_num == 2
                 probe_pos = randi(seq.stim_per_block - 3, [probes_per_run seq.num_runs]) + 2;
