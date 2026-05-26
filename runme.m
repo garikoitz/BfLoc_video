@@ -55,7 +55,7 @@ TO run the experiment, go with this sample command
 
 runme('s1_s1_sub-01_ses-01_test-01', 0, 1, 2, 3, 0)
 
-
+runme('s2_s1_sub-pilot02_ses-01', 0, 1, 6, 3, 0,0)
 # To end the process: 
 cmd+0: to be in the command line
 shift+cmd+0: to go  back to the editor
@@ -113,6 +113,13 @@ end
 % which run number to begin executing (default = 1)
 if nargin < 6
     start_run = 1;
+elseif start_run == 0
+    warning('start_run = 0 is invalid in MATLAB indexing. Starting from run 1 instead.');
+    start_run = 1;
+elseif ~isscalar(start_run) || start_run ~= floor(start_run) || start_run < 1
+    error('start_run must be a positive integer between 1 and num_runs.');
+elseif start_run > num_runs
+    error('start_run (%d) cannot be greater than num_runs (%d).', start_run, num_runs);
 end
 
 % whether to use EyeLink eye-tracker
@@ -148,13 +155,6 @@ num_of_TR=dummy_scans+count_down/TR-dummy_scans+round(num_of_stim/(TR/onset_dur)
 script_TR=sprintf("########### Total volumns for this experiment is %i ########### \n", num_of_TR);
 disp(script_TR);
 
-run_dur_s      = seq.run_dur;                              % stimulus period per run (s)
-run_total_s    = run_dur_s + count_down;                   % including countdown
-all_runs_s     = num_runs * run_total_s;                   % all runs combined
-script_time = sprintf("########### Run duration: %.0f s (%.1f min) | All %d runs: %.0f s (%.1f min) ########### \n", ...
-    run_total_s, run_total_s/60, num_runs, all_runs_s, all_runs_s/60);
-disp(script_time);
-
 session_dir = (fullfile(session.exp_dir, 'data', session.id));
 if ~exist(session_dir, 'dir') == 7
     mkdir(session_dir);
@@ -169,7 +169,7 @@ for rr = start_run:num_runs
     session = run_exp(session, rr);
     save(fpath, 'session', '-v7.3');
 end
-%write_parfiles(session);
+write_parfiles(session);
 write_event_tsv(session);
 
 end

@@ -21,7 +21,7 @@ classdef fLocSequence
     end
 
     properties (Constant)
-        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'EN_FF' 'LSE_SWV' 'CH_FF'};
+        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'IMG_SC' 'LSE_WV' 'RW_SC' 'CH_RAW' 'EN_FF' 'LSE_SWV' 'CH_FF'};
         stim_per_block = 12;   % stimuli per block
         stim_duty_cycle = 0.5; % duration of stimulus duty cycle (s)
         % Number of times each condition (including baseline) repeats per run.
@@ -42,8 +42,8 @@ classdef fLocSequence
     end
 
     properties (Constant, Hidden)
-        %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV' 'CH_AW'};
-        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'EN_FF' 'LSE_SWV' 'CH_FF'};
+        %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'IMG_SC' 'LSE_WV' 'CH_AW'};
+        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'IMG_SC' 'LSE_WV' 'RW_SC' 'CH_RAW' 'EN_FF' 'LSE_SWV' 'CH_FF'};
         %stim_set2 = {'EN_SC'   'EN_FF' 'LSE_SWV'};
         %stim_set3 = [stim_set1, stim_set2];
         % JP
@@ -180,8 +180,8 @@ classdef fLocSequence
             % --- Get block conditions ---
             blocks_per_cond = seq.blocks_per_cond;
             baseline_bpc    = seq.baseline_blocks_per_cond;
-            n_stim_conds = num_conds - 1;  % = 10
-            % Stim conditions (1–10) each appear blocks_per_cond times; baseline (0) appears baseline_bpc times
+            n_stim_conds = num_conds - 1;
+            % Stim conditions (1–n_stim_conds) each appear blocks_per_cond times; baseline (0) appears baseline_bpc times
             conds_sequence = [zeros(1, baseline_bpc), repmat(1:n_stim_conds, 1, blocks_per_cond)];
             n_inner = baseline_bpc + n_stim_conds * blocks_per_cond;
             block_conds_inner = zeros(n_inner, num_runs);
@@ -208,13 +208,20 @@ classdef fLocSequence
             for cc = 1:length(unique_cats)
                 cat_idxs = find(strcmp(unique_cats{cc}, stim_cat_list));
                 n_cat = length(cat_idxs);
-                if n_cat <= seq.stim_per_set
-                    stim_nums = randperm(seq.stim_per_set, n_cat);
+                
+                % Check if this is RW_SC (which has 160 items) or a regular category (80 items)
+                if strcmpi(unique_cats{cc}, 'RW_SC')
+                    max_items = 160;  % RW_SC has 160 items (80 CH_SC + 80 EN_SC)
                 else
-                    % OLD: stim_nums = [randperm(seq.stim_per_set), randsample(seq.stim_per_set, n_cat - seq.stim_per_set, true)'];
+                    max_items = seq.stim_per_set;  % Regular categories have 80 items
+                end
+                
+                if n_cat <= max_items
+                    stim_nums = randperm(max_items, n_cat);
+                else
                     % Generate by cycling through randperm to avoid repetitions
-                    n_cycles = ceil(n_cat / seq.stim_per_set);
-                    stim_nums = repmat(randperm(seq.stim_per_set), 1, n_cycles);
+                    n_cycles = ceil(n_cat / max_items);
+                    stim_nums = repmat(randperm(max_items), 1, n_cycles);
                     stim_nums = stim_nums(1:n_cat);
                     
                 end
@@ -239,7 +246,7 @@ classdef fLocSequence
             end
             stim_list = cellfun(@(X, Y) [X Y], stim_cat_list, stim_num_list_fixed, 'uni', false);
             % insert task probes in randomly-selected stimulus blocks
-            n_stim_blocks = n_stim_conds * blocks_per_cond;  % 10 * 6 = 60 (probes only in stimulus blocks)
+            n_stim_blocks = n_stim_conds * blocks_per_cond;  % probes only in stimulus blocks
             probes_per_run = floor(seq.task_freq * n_stim_blocks);
             if seq.task_num == 2
                 probe_pos = randi(seq.stim_per_block - 3, [probes_per_run seq.num_runs]) + 2;
