@@ -21,7 +21,7 @@ classdef fLocSequence
     end
 
     properties (Constant)
-        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
+        stim_conds = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'IMG_SC' 'LSE_WV' 'RW_SC' 'CH_RAW' 'EN_FF' 'LSE_SWV' 'CH_FF'};
         stim_per_block = 12;   % stimuli per block
         stim_duty_cycle = 0.5; % duration of stimulus duty cycle (s)
         % Number of times each condition (including baseline) repeats per run.
@@ -35,15 +35,16 @@ classdef fLocSequence
         %   Also delete the cached _fLocSequence.mat in data/<session_id>/
         %   after changing this value, otherwise the old sequence is reused.
         %
-        %   blocks_per_cond = 1  ->  12 blocks/run  (~1.2 min)  [DEBUG]
-        %   blocks_per_cond = 6  ->  62 blocks/run  (~6.2 min)  [EXPERIMENT]
+        %   blocks_per_cond = 1  ->  20 blocks/run  (~2.0 min)  [DEBUG]
+        %   blocks_per_cond = 6  ->  70 blocks/run  (~7.0 min)  [EXPERIMENT]
         blocks_per_cond = 6;
+        baseline_blocks_per_cond = 8; % baseline blocks in the middle shuffle (stim conditions each get blocks_per_cond)
     end
 
     properties (Constant, Hidden)
-        %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'LSE_WV' 'CH_AW'};
-        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'LSE_WV' 'CH_SC' 'CH_RAW' 'IMG_SC' 'LSE_SWV'};
-        %stim_set2 = {'EN_SC'   'IMG_SC' 'LSE_SWV'};
+        %stim_set1 = {'EN_RW' 'CH_RW' 'IMG_RI' 'IMG_SC' 'LSE_WV' 'CH_AW'};
+        stim_set1 = {'EN_RW' 'CH_RW' 'CH_AW' 'IMG_RI' 'IMG_SC' 'LSE_WV' 'RW_SC' 'CH_RAW' 'EN_FF' 'LSE_SWV' 'CH_FF'};
+        %stim_set2 = {'EN_SC'   'EN_FF' 'LSE_SWV'};
         %stim_set3 = [stim_set1, stim_set2];
         % JP
         %stim_set1 = {'body' 'JP_word1' 'adult' 'JP_FF1' 'JP_CB1' 'Processed_Videos'};
@@ -106,8 +107,8 @@ classdef fLocSequence
         function run_dur = get.run_dur(seq)
             block_dur = seq.stim_per_block * seq.stim_duty_cycle;
             blocks_per_cond = seq.blocks_per_cond;
-            % Middle: (9 stim conds + baseline) * blocks_per_cond each; plus 1 baseline at start + 1 at end
-            blocks_per_run = 2 + (length(seq.stim_conds) + 1) * blocks_per_cond;
+            % Middle: 10 stim conds × blocks_per_cond + baseline_blocks_per_cond; plus 1 fixed baseline at start + 1 at end
+            blocks_per_run = 2 + seq.baseline_blocks_per_cond + length(seq.stim_conds) * blocks_per_cond;
             run_dur = block_dur * blocks_per_run;
         end
 
@@ -178,11 +179,12 @@ classdef fLocSequence
 
             % --- Get block conditions ---
             blocks_per_cond = seq.blocks_per_cond;
-            n_stim_conds = num_conds - 1;  % = 9
-            % Include baseline (0) in the middle shuffle, as in original design:
-            %   (9 stim conds + 1 baseline) * blocks_per_cond = middle blocks
-            conds_sequence = repmat(0:n_stim_conds, 1, blocks_per_cond);  % 0×60, each cond 6 times
-            block_conds_inner = zeros((n_stim_conds + 1) * blocks_per_cond, num_runs);
+            baseline_bpc    = seq.baseline_blocks_per_cond;
+            n_stim_conds = num_conds - 1;
+            % Stim conditions (1–n_stim_conds) each appear blocks_per_cond times; baseline (0) appears baseline_bpc times
+            conds_sequence = [zeros(1, baseline_bpc), repmat(1:n_stim_conds, 1, blocks_per_cond)];
+            n_inner = baseline_bpc + n_stim_conds * blocks_per_cond;
+            block_conds_inner = zeros(n_inner, num_runs);
             for rr = 1:num_runs
                 block_conds_inner(:, rr) = shuffle(conds_sequence)';
             end
@@ -192,7 +194,7 @@ classdef fLocSequence
             block_onsets = repmat(0:block_dur:seq.run_dur - block_dur, num_runs, 1)';
 
             % --- Build stim_mat: category for each stimulus position ---
-            stim_mat = cell(stim_per_block, (n_stim_conds + 1) * blocks_per_cond + 2, num_runs);
+            stim_mat = cell(stim_per_block, n_inner + 2, num_runs);
             for rr = 1:num_runs
                 cat_list = ['baseline' run_sets(rr, :)];
                 cat_seq = cat_list(block_conds(:, rr) + 1);
@@ -206,13 +208,20 @@ classdef fLocSequence
             for cc = 1:length(unique_cats)
                 cat_idxs = find(strcmp(unique_cats{cc}, stim_cat_list));
                 n_cat = length(cat_idxs);
-                if n_cat <= seq.stim_per_set
-                    stim_nums = randperm(seq.stim_per_set, n_cat);
+                
+                % Check if this is RW_SC (which has 160 items) or a regular category (80 items)
+                if strcmpi(unique_cats{cc}, 'RW_SC')
+                    max_items = 160;  % RW_SC has 160 items (80 CH_SC + 80 EN_SC)
                 else
-                    % OLD: stim_nums = [randperm(seq.stim_per_set), randsample(seq.stim_per_set, n_cat - seq.stim_per_set, true)'];
+                    max_items = seq.stim_per_set;  % Regular categories have 80 items
+                end
+                
+                if n_cat <= max_items
+                    stim_nums = randperm(max_items, n_cat);
+                else
                     % Generate by cycling through randperm to avoid repetitions
-                    n_cycles = ceil(n_cat / seq.stim_per_set);
-                    stim_nums = repmat(randperm(seq.stim_per_set), 1, n_cycles);
+                    n_cycles = ceil(n_cat / max_items);
+                    stim_nums = repmat(randperm(max_items), 1, n_cycles);
                     stim_nums = stim_nums(1:n_cat);
                     
                 end
@@ -237,14 +246,14 @@ classdef fLocSequence
             end
             stim_list = cellfun(@(X, Y) [X Y], stim_cat_list, stim_num_list_fixed, 'uni', false);
             % insert task probes in randomly-selected stimulus blocks
-            n_stim_blocks = n_stim_conds * blocks_per_cond;  % 9 * 6 = 54 (probes only in stimulus blocks)
+            n_stim_blocks = n_stim_conds * blocks_per_cond;  % probes only in stimulus blocks
             probes_per_run = floor(seq.task_freq * n_stim_blocks);
             if seq.task_num == 2
                 probe_pos = randi(seq.stim_per_block - 3, [probes_per_run seq.num_runs]) + 2;
             else
                 probe_pos = randi(seq.stim_per_block - 2, [probes_per_run seq.num_runs ]) + 1;
             end
-            probe_stim_mat = zeros(seq.stim_per_block, (n_stim_conds + 1) * blocks_per_cond + 2, seq.num_runs);
+            probe_stim_mat = zeros(seq.stim_per_block, n_inner + 2, seq.num_runs);
             for rr = 1:seq.num_runs
                 stim_block_idxs = shuffle(find(block_conds(:, rr) > 0));
                 xi = probe_pos(:, rr);

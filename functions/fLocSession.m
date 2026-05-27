@@ -15,8 +15,9 @@ classdef fLocSession
     properties (Hidden)
         stim_set  % stimulus set/s (1 = standard, 2 = alternate, 3 = both)
         task_num  % task number (1 = 1-back, 2 = 2-back, 3 = oddball)
-        input     % device number of input used for response collection
-        keyboard  % device number of native computer keyboard
+        input       % device number of input used for response collection
+        keyboard    % device number of native computer keyboard
+        screen_mode % display preset: 'lab' (MRI, merged 3840x1080) | 'dev' (Mac + 2K external)
         hit_cnt   % number of hits per run
         fa_cnt    % number of false alarms per run
         el            % EyelinkInitDefaults structure (colours, target settings)
@@ -88,6 +89,10 @@ classdef fLocSession
             session.date = date;
             session.hit_cnt = zeros(1, session.num_runs);
             session.fa_cnt = zeros(1, session.num_runs);
+            % Screen preset — change before running if needed:
+            %   'lab' : MRI lab, both screens merged into a 3840x1080 virtual desktop
+            %   'dev' : Mac dev setup, open on the external 2K screen by PTB screen index
+            session.screen_mode = 'lab';
         end
 
         % get session-specific id string
@@ -129,9 +134,59 @@ classdef fLocSession
         function session = load_seqs(session)
             fname = [session.id '_fLocSequence.mat'];
             fpath = fullfile(session.exp_dir, 'data', session.id, fname);
-            % make stimulus sequences if not already defined for session
-            if ~exist(fpath, 'file')
-                seq = fLocSequence(session.stim_set, session.num_runs, session.task_num, session.exp_dir);
+            desired_seq = fLocSequence(session.stim_set, session.num_runs, session.task_num, session.exp_dir);
+            regenerate_seq = ~exist(fpath, 'file');
+
+            % If cache exists, validate it against current session settings / condition list.
+            if ~regenerate_seq
+                S = load(fpath, 'seq');
+                if ~isfield(S, 'seq')
+                    regenerate_seq = true;
+                else
+                    seq = S.seq;
+                    % IMPORTANT: class Constant properties (e.g., stim_conds)
+                    % can reflect current code even for old cached objects.
+                    % Therefore detect staleness from generated content.
+                    try
+                        cached_n_stim_conds = max(seq.block_conds(:)); % excludes baseline=0
+                        expected_n_stim_conds = length(desired_seq.stim_conds);
+                        cond_count_changed = (cached_n_stim_conds ~= expected_n_stim_conds);
+                    catch
+                        cond_count_changed = true;
+                    end
+                    try
+                        all_names = seq.stim_names(:);
+                        is_baseline = strcmpi(all_names, 'baseline');
+                        all_names = all_names(~is_baseline);
+                        dash_pos = cellfun(@(n) strfind(n, '-'), all_names, 'UniformOutput', false);
+                        has_dash = ~cellfun(@isempty, dash_pos);
+                        cats = cell(size(all_names));
+                        cats(has_dash) = cellfun(@(n,p) n(1:p(1)-1), all_names(has_dash), dash_pos(has_dash), 'UniformOutput', false);
+                        cats(~has_dash) = {''};
+                        cached_cat_list = unique(cats(~cellfun(@isempty, cats)));
+                        expected_cat_list = desired_seq.stim_conds(:);
+                        cond_list_changed = ~all(ismember(expected_cat_list, cached_cat_list));
+                    catch
+                        cond_list_changed = true;
+                    end
+                    try
+                        settings_changed = (seq.num_runs ~= session.num_runs) || ...
+                                           (seq.task_num ~= session.task_num) || ...
+                                           (seq.stim_set ~= session.stim_set);
+                    catch
+                        settings_changed = true;
+                    end
+                    if cond_count_changed || cond_list_changed || settings_changed
+                        warning(['Cached sequence is out of date and will be regenerated: ' ...
+                                 'conditions or session settings changed.']);
+                        regenerate_seq = true;
+                    end
+                end
+            end
+
+            % make / refresh stimulus sequence
+            if regenerate_seq
+                seq = desired_seq;
                 seq = make_runs(seq);
                 mkdir(fileparts(fpath));
                 % EDIT seq HERE, so that the videos are 6
@@ -175,15 +230,16 @@ classdef fLocSession
                 % --- End reassignment ---
 
                 save(fpath, 'seq', '-v7.3');
-            else
-                load(fpath);
             end
             session.sequence = seq;
         end
 
-        % register input devices 
+        % register input devices
         function session = find_inputs(session)
             laptop_key = get_keyboard_num;
+            if laptop_key == 0
+                laptop_key = -1; % productID not matched; merge all devices so any keyboard works
+            end
             button_key = get_box_num; % NNL scanner trigger (KeyWarrior8 Flex)
             if button_key ~= 0
                 session.keyboard = laptop_key;
@@ -205,6 +261,9 @@ classdef fLocSession
 
         % execute a run of the experiment
         function session = run_exp(session, run_num)
+            if ~isscalar(run_num) || run_num ~= floor(run_num) || run_num < 1 || run_num > session.num_runs
+                error('run_num must be an integer between 1 and %d (received %g).', session.num_runs, run_num);
+            end
             % get timing information and initialize response containers
             session = find_inputs(session);
             % k=-1 tells PTB to merge ALL connected keyboards/input devices into one
@@ -222,7 +281,7 @@ classdef fLocSession
             run_task_probes = session.sequence.task_probes(:, run_num);
             resp_keys = {}; resp_press = zeros(length(stim_names), 1);
             % setup screen and load all stimuli in run
-            [window_ptr, rect, center, screen_num] = do_screen;
+            [window_ptr, rect, center, screen_num] = do_screen(session.screen_mode);
             ifi = Screen('GetFlipInterval', window_ptr); % inter-frame interval for scheduling
             center_x = center(1); center_y = center(2); s = session.stim_size / 2;
             stim_rect = [center_x - s center_y - s center_x + s center_y + s];
@@ -289,12 +348,14 @@ classdef fLocSession
             end
 
             % start experiment triggering scanner if applicable
+            trigger_start_time = NaN;
             if session.trigger == 0
                 Screen('FillRect', window_ptr, bcol);
                 Screen('Flip', window_ptr);
                 DrawFormattedText(window_ptr, session.instructions, 'center', 'center', tcol);
                 Screen('Flip', window_ptr);
                 get_key('s', session.keyboard);
+                trigger_start_time = GetSecs;
             elseif session.trigger == 1
                 Screen('FillRect', window_ptr, bcol);
                 Screen('Flip', window_ptr);
@@ -304,6 +365,7 @@ classdef fLocSession
                     get_key('g', session.keyboard);
                     [status, ~] = start_scan;
                     if status == 0
+                        trigger_start_time = GetSecs;
                         break
                     else
                         message = 'Trigger failed.';
@@ -353,6 +415,13 @@ classdef fLocSession
                 Eyelink('Message', 'RUN_START run=%d session=%s', run_num, session.id);
             end
             flip_log = nan(length(stim_names), 1);  % record actual flip time of each stimulus
+            % Per-trial timing diagnostics (relative to run start unless noted)
+            actual_onset_rel = nan(length(stim_names), 1);
+            actual_offset_rel = nan(length(stim_names), 1);
+            planned_onset_rel = stim_onsets;
+            planned_dur = nan(length(stim_names), 1);
+            actual_dur = nan(length(stim_names), 1);
+            modality = repmat({''}, length(stim_names), 1);
             % Timestamped keylog: one row per press — key name, absolute time, run-relative time, stimulus index, device
             keylog = struct('key', {}, 'time_abs', {}, 'time_rel', {}, 'stim_idx', {}, 'device_id', {});
             for ii = 1:length(stim_names)
@@ -362,15 +431,22 @@ classdef fLocSession
                     cleanup_run(img_ptrs, window_ptr);
                     error('Experiment aborted by user (Escape key).');
                 end
+                t_onset = start_time + stim_onsets(ii);
                 if strcmpi(stim_names{ii}, 'baseline')
-                    t_onset = start_time + stim_onsets(ii);
+                    modality{ii} = 'baseline';
+                    planned_dur(ii) = sdc;
                     Screen('FillRect', window_ptr, bcol);
                     flip_log(ii) = Screen('Flip', window_ptr, t_onset - ifi/2);
+                    actual_onset_rel(ii) = flip_log(ii) - start_time;
                     if session.use_eyelink == 1
                         Eyelink('Message', 'FIXATION_ONSET trial=%d time_ms=%d', ...
                             ii, round((flip_log(ii) - start_time) * 1000));
                     end
-                    WaitSecs('UntilTime', t_onset + sdc);
+                            % Hold baseline for full duty-cycle from ACTUAL flip time
+                            % (using planned t_onset here can truncate when running late).
+                            WaitSecs('UntilTime', flip_log(ii) + sdc);
+                    actual_offset_rel(ii) = (flip_log(ii) + sdc) - start_time;
+                    actual_dur(ii) = actual_offset_rel(ii) - actual_onset_rel(ii);
                     if session.use_eyelink == 1
                         Eyelink('Message', 'FIXATION_OFFSET trial=%d time_ms=%d', ...
                             ii, round((GetSecs - start_time) * 1000));
@@ -379,6 +455,11 @@ classdef fLocSession
                 end
                 ii_press = []; ii_keys = [];
                 if img_ptrs(ii) == -1
+                    modality{ii} = 'video';
+                    % If we are ahead of schedule, wait until planned onset.
+                    if GetSecs < t_onset
+                        WaitSecs('UntilTime', t_onset);
+                    end
                     stim_name = stim_names{ii};
                     video_durs_table = session.sequence.all_video_lengths;
                     idx = find(video_durs_table.Filename == stim_name);
@@ -386,6 +467,7 @@ classdef fLocSession
                         error('Video not found: %s', stim_name);
                     end
                     video_duration = video_durs_table.Duration_Secs(idx);
+                    planned_dur(ii) = video_duration;
                     dash_idx = strfind(stim_name, '-');
                     if isempty(dash_idx)
                         error('Unexpected video filename format: %s', stim_name);
@@ -395,6 +477,7 @@ classdef fLocSession
                     moviePtr = Screen('OpenMovie', window_ptr, moviePath);
                     Screen('PlayMovie', moviePtr, 1);
                     movieStart = GetSecs;
+                    actual_onset_rel(ii) = movieStart - start_time;
                     if session.use_eyelink == 1
                         Eyelink('Message', 'VIDEO_ONSET trial=%d/%d name=%s time_ms=%d', ...
                             ii, length(stim_names), stim_names{ii}, ...
@@ -428,6 +511,8 @@ classdef fLocSession
                     end
                     Screen('PlayMovie', moviePtr, 0);
                     Screen('CloseMovie', moviePtr);
+                    actual_offset_rel(ii) = (movieStart + video_duration) - start_time;
+                    actual_dur(ii) = actual_offset_rel(ii) - actual_onset_rel(ii);
                     if session.use_eyelink == 1
                         Eyelink('Message', 'VIDEO_OFFSET trial=%d name=%s time_ms=%d', ...
                             ii, stim_names{ii}, ...
@@ -444,6 +529,11 @@ classdef fLocSession
                         for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
                     end
                 elseif img_ptrs(ii) == -2
+                    modality{ii} = 'audio';
+                    % If we are ahead of schedule, wait until planned onset.
+                    if GetSecs < t_onset
+                        WaitSecs('UntilTime', t_onset);
+                    end
                     % Audio stimulus: show paired background image while playing
                     isOddball = (run_task_probes(ii) == 1);
                     Screen('FillRect', window_ptr, bcol);
@@ -455,8 +545,10 @@ classdef fLocSession
                     end
                     Screen('Flip', window_ptr);
                     clip_dur = size(aud_data{ii}, 1) / aud_fs(ii);
+                    planned_dur(ii) = clip_dur;
                     ap = aud_players{ii};
                     aud_start = GetSecs;
+                    actual_onset_rel(ii) = aud_start - start_time;
                     play(ap, 1); % start from sample 1 (rewind + play)
                     if session.use_eyelink == 1
                         Eyelink('Message', 'AUDIO_ONSET trial=%d/%d name=%s time_ms=%d', ...
@@ -469,6 +561,8 @@ classdef fLocSession
                     % aud_start+clip_dur+aud_isi would cut off the tail.
                     % audioplayer stops automatically when samples run out.
                     [keys, ts, devs, ie] = record_keys_ts(aud_start, clip_dur, k);
+                    actual_offset_rel(ii) = (aud_start + clip_dur) - start_time;
+                    actual_dur(ii) = actual_offset_rel(ii) - actual_onset_rel(ii);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                     for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
                     aud_isi = session.sequence.audio_isis(ii);
@@ -484,7 +578,8 @@ classdef fLocSession
                             round((aud_start + clip_dur + aud_isi - start_time) * 1000));
                     end
                 else
-                    t_onset = start_time + stim_onsets(ii);
+                    modality{ii} = 'image';
+                    planned_dur(ii) = stim_dur;
                     Screen('DrawTexture', window_ptr, img_ptrs(ii), [], stim_rect);
                     isOddball = (run_task_probes(ii) == 1);
                     if session.task_num == 3 && isOddball
@@ -496,20 +591,26 @@ classdef fLocSession
                             ii, length(stim_names), stim_names{ii}, ...
                             round((flip_log(ii) - start_time) * 1000));
                     end
-                    [keys, ts, devs, ie] = record_keys_ts(t_onset, stim_dur, k);
+                    % Use actual flip time as timing anchor to avoid shortened
+                    % image durations when a scheduled onset is missed.
+                    actual_onset = flip_log(ii);
+                    actual_onset_rel(ii) = actual_onset - start_time;
+                    [keys, ts, devs, ie] = record_keys_ts(actual_onset, stim_dur, k);
                     ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                     for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
+                    actual_offset_rel(ii) = actual_onset_rel(ii) + stim_dur;
+                    actual_dur(ii) = actual_offset_rel(ii) - actual_onset_rel(ii);
                     if isi_dur > 0
                         Screen('FillRect', window_ptr, bcol);
-                        Screen('Flip', window_ptr, t_onset + stim_dur - ifi/2);
-                        [keys, ts, devs, ie] = record_keys_ts(t_onset + stim_dur, isi_dur, k);
+                        Screen('Flip', window_ptr, actual_onset + stim_dur - ifi/2);
+                        [keys, ts, devs, ie] = record_keys_ts(actual_onset + stim_dur, isi_dur, k);
                         ii_keys = [ii_keys keys]; ii_press = [ii_press ie];
                         for kk = 1:numel(ts); keylog(end+1) = struct('key', keys{kk}, 'time_abs', ts(kk), 'time_rel', ts(kk)-start_time, 'stim_idx', ii, 'device_id', devs(kk)); end %#ok<AGROW>
                     end
                     if session.use_eyelink == 1
                         Eyelink('Message', 'IMAGE_OFFSET trial=%d name=%s time_ms=%d', ...
                             ii, stim_names{ii}, ...
-                            round((t_onset + stim_dur - start_time) * 1000));
+                            round((actual_onset + stim_dur - start_time) * 1000));
                     end
                 end
                 resp_keys{ii} = ii_keys;
@@ -569,15 +670,87 @@ classdef fLocSession
                 else
                     actual_first = valid_flips(1)   - start_time;
                     actual_last  = valid_flips(end)  - start_time;
-                    actual_dur   = (t_block_end) - valid_flips(1);
+                    block_actual_dur = (t_block_end) - valid_flips(1);
                     fprintf('  Block %2d onset=%6.3fs | first flip=%6.3fs | last flip=%6.3fs | block dur=%.3fs\n', ...
-                        bb, block_onsets_run(bb), actual_first, actual_last, actual_dur);
+                        bb, block_onsets_run(bb), actual_first, actual_last, block_actual_dur);
                 end
             end
             fprintf('==========================================\n\n');
             fname = [session.id '_backup_run' num2str(run_num) '.mat'];
             fpath = fullfile(session.exp_dir, 'data', session.id, fname);
             save(fpath, 'resp_keys', 'resp_press', 'keylog', '-v7.3');
+
+            % Save per-trial actual timing log (TSV)
+            timing_fname = sprintf('%s_run-%02d_actual_timing.tsv', session.id, run_num);
+            timing_fpath = fullfile(session.exp_dir, 'data', session.id, timing_fname);
+            fid_t = fopen(timing_fpath, 'w');
+            if fid_t == -1
+                warning('Could not open timing log for writing: %s', timing_fpath);
+            else
+                if isnan(trigger_start_time)
+                    trigger_start_time = start_time;
+                end
+                trigger_to_run_offset = start_time - trigger_start_time;
+                n_trials = numel(stim_names);
+                fprintf(fid_t, 'trial_index\tstim_name\ttrial_type\tmodality\tplanned_onset_s\tactual_flip_onset_s\tflip_delay_ms\tdisplay_end_s\tplanned_duration_s\tactual_duration_s\n');
+                for tt = 1:n_trials
+                    stim_name_tt = stim_names{tt};
+                    if strcmpi(stim_name_tt, 'baseline')
+                        trial_type_tt = 'baseline';
+                    else
+                        dash_pos = strfind(stim_name_tt, '-');
+                        if isempty(dash_pos)
+                            trial_type_tt = stim_name_tt;
+                        else
+                            trial_type_tt = stim_name_tt(1:dash_pos(1)-1);
+                        end
+                    end
+                    planned_onset_trigger = planned_onset_rel(tt) + trigger_to_run_offset;
+                    actual_flip_onset_trigger = actual_onset_rel(tt) + trigger_to_run_offset;
+                    display_end_trigger = actual_offset_rel(tt) + trigger_to_run_offset;
+                    flip_delay_ms = (actual_flip_onset_trigger - planned_onset_trigger) * 1000;
+                    fprintf(fid_t, '%d\t%s\t%s\t%s\t%.6f\t%.6f\t%.3f\t%.6f\t%.6f\t%.6f\n', ...
+                        tt, stim_name_tt, trial_type_tt, modality{tt}, ...
+                        planned_onset_trigger, actual_flip_onset_trigger, flip_delay_ms, display_end_trigger, ...
+                        planned_dur(tt), actual_dur(tt));
+                end
+                fclose(fid_t);
+
+                % Also append all runs into one cumulative timing file
+                timing_all_fname = sprintf('%s_actual_timing_allruns.tsv', session.id);
+                timing_all_fpath = fullfile(session.exp_dir, 'data', session.id, timing_all_fname);
+                write_header = ~exist(timing_all_fpath, 'file');
+                fid_all = fopen(timing_all_fpath, 'a');
+                if fid_all == -1
+                    warning('Could not open cumulative timing log for appending: %s', timing_all_fpath);
+                else
+                    if write_header
+                        fprintf(fid_all, 'run\ttrial_index\tstim_name\ttrial_type\tmodality\tplanned_onset_s\tactual_flip_onset_s\tflip_delay_ms\tdisplay_end_s\tplanned_duration_s\tactual_duration_s\n');
+                    end
+                    for tt = 1:n_trials
+                        stim_name_tt = stim_names{tt};
+                        if strcmpi(stim_name_tt, 'baseline')
+                            trial_type_tt = 'baseline';
+                        else
+                            dash_pos = strfind(stim_name_tt, '-');
+                            if isempty(dash_pos)
+                                trial_type_tt = stim_name_tt;
+                            else
+                                trial_type_tt = stim_name_tt(1:dash_pos(1)-1);
+                            end
+                        end
+                        planned_onset_trigger = planned_onset_rel(tt) + trigger_to_run_offset;
+                        actual_flip_onset_trigger = actual_onset_rel(tt) + trigger_to_run_offset;
+                        display_end_trigger = actual_offset_rel(tt) + trigger_to_run_offset;
+                        flip_delay_ms = (actual_flip_onset_trigger - planned_onset_trigger) * 1000;
+                        fprintf(fid_all, '%d\t%d\t%s\t%s\t%s\t%.6f\t%.6f\t%.3f\t%.6f\t%.6f\t%.6f\n', ...
+                            run_num, tt, stim_name_tt, trial_type_tt, modality{tt}, ...
+                            planned_onset_trigger, actual_flip_onset_trigger, flip_delay_ms, display_end_trigger, ...
+                            planned_dur(tt), actual_dur(tt));
+                    end
+                    fclose(fid_all);
+                end
+            end
             session = score_task(session, run_num);
             for i = 1:length(img_ptrs)
                 if img_ptrs(i) > 0
@@ -650,30 +823,45 @@ classdef fLocSession
             end
         end
 
-         % write vistasoft-compatible event.tsv file for each run
+        % write BIDS-compatible events.tsv file for each run
         function session = write_event_tsv(session)
-            disp('Start writing vistasoft-compatible event.tsv files');
+            disp('Writing BIDS-compatible events.tsv files');
             session.event = cell(1, session.num_runs);
 
-            % Define condition/category names and block duration
-            conds = ['Baseline' session.sequence.stim_conds];
-            stim_cat = ['baseline' session.sequence.stim_set1];
             duration = session.sequence.stim_per_block * session.sequence.stim_duty_cycle;
+
+            % build BIDS filename prefix from name parts: XX_YY_sub-NN_ses-NN -> sub-NN_ses-NN_task-BfLocVideo
+            name_parts = split(session.name, '_');
+            bids_prefix = [name_parts{3} '_' name_parts{4} '_task-BfLocVideo'];
+
+            out_dir = fullfile(session.exp_dir, 'data', session.id);
+            if ~exist(out_dir, 'dir'); mkdir(out_dir); end
 
             for rr = 1:session.num_runs
                 block_onsets = session.sequence.block_onsets(:, rr);
-                block_conds = session.sequence.block_conds(:, rr);
-                cond_names = stim_cat(block_conds + 1);
+                stim_onsets  = session.sequence.stim_onsets(:, rr);
+                stim_names   = session.sequence.stim_names(:, rr);
 
-                % Create a filename using session id and run number
-                parts_id = split(session.id, '_');
-                fname = [parts_id{1} '_' parts_id{2} '_' parts_id{3} '_run-' num2str(rr, '%02d') '_events.tsv'];
-                fpath = fullfile(session.exp_dir, 'data', session.id, fname);
+                fname = [bids_prefix '_run-' num2str(rr, '%02d') '_events.tsv'];
+                fpath = fullfile(out_dir, fname);
 
                 fid = fopen(fpath, 'w');
                 fprintf(fid, 'onset\tduration\ttrial_type\n');
                 for bb = 1:length(block_onsets)
-                    fprintf(fid, '%.2f\t%d\t%s\n', block_onsets(bb), duration, cond_names{bb});
+                    % find the first stimulus whose onset matches this block start
+                    idx = find(abs(stim_onsets - block_onsets(bb)) < 0.01, 1, 'first');
+                    if isempty(idx)
+                        trial_type = 'baseline';
+                    else
+                        stim_name = stim_names{idx};
+                        dash_pos  = strfind(stim_name, '-');
+                        if isempty(dash_pos)
+                            trial_type = 'baseline';
+                        else
+                            trial_type = stim_name(1:dash_pos(1)-1);
+                        end
+                    end
+                    fprintf(fid, '%.2f\t%.2f\t%s\n', block_onsets(bb), duration, trial_type);
                 end
                 fclose(fid);
                 session.event{rr} = fpath;

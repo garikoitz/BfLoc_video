@@ -55,7 +55,7 @@ TO run the experiment, go with this sample command
 
 runme('s1_s1_sub-01_ses-01_test-01', 0, 1, 2, 3, 0)
 
-
+runme('s2_s1_sub-pilot02_ses-01', 0, 1, 6, 3, 1, 0)
 # To end the process: 
 cmd+0: to be in the command line
 shift+cmd+0: to go  back to the editor
@@ -113,6 +113,13 @@ end
 % which run number to begin executing (default = 1)
 if nargin < 6
     start_run = 1;
+elseif start_run == 0
+    warning('start_run = 0 is invalid in MATLAB indexing. Starting from run 1 instead.');
+    start_run = 1;
+elseif ~isscalar(start_run) || start_run ~= floor(start_run) || start_run < 1
+    error('start_run must be a positive integer between 1 and num_runs.');
+elseif start_run > num_runs
+    error('start_run (%d) cannot be greater than num_runs (%d).', start_run, num_runs);
 end
 
 % whether to use EyeLink eye-tracker
@@ -128,6 +135,10 @@ end
 
 % setup fLocSession and save session information
 session = fLocSession(name, trigger, stim_set, num_runs, task_num, use_eyelink);
+% Screen preset — change this line depending on where you are running:
+%   'dev' : Mac + 2K external screen (your office/home setup)
+%   'lab' : MRI room, both screens merged into one 3840x1080 virtual desktop
+session.screen_mode = 'lab';
 session = load_seqs(session);
 %session.seq = make_runs(session.seq);  % <== This is the fix
 
