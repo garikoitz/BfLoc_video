@@ -15,8 +15,9 @@ classdef fLocSession
     properties (Hidden)
         stim_set  % stimulus set/s (1 = standard, 2 = alternate, 3 = both)
         task_num  % task number (1 = 1-back, 2 = 2-back, 3 = oddball)
-        input     % device number of input used for response collection
-        keyboard  % device number of native computer keyboard
+        input       % device number of input used for response collection
+        keyboard    % device number of native computer keyboard
+        screen_mode % display preset: 'lab' (MRI, merged 3840x1080) | 'dev' (Mac + 2K external)
         hit_cnt   % number of hits per run
         fa_cnt    % number of false alarms per run
         el            % EyelinkInitDefaults structure (colours, target settings)
@@ -88,6 +89,10 @@ classdef fLocSession
             session.date = date;
             session.hit_cnt = zeros(1, session.num_runs);
             session.fa_cnt = zeros(1, session.num_runs);
+            % Screen preset — change before running if needed:
+            %   'lab' : MRI lab, both screens merged into a 3840x1080 virtual desktop
+            %   'dev' : Mac dev setup, open on the external 2K screen by PTB screen index
+            session.screen_mode = 'lab';
         end
 
         % get session-specific id string
@@ -229,9 +234,12 @@ classdef fLocSession
             session.sequence = seq;
         end
 
-        % register input devices 
+        % register input devices
         function session = find_inputs(session)
             laptop_key = get_keyboard_num;
+            if laptop_key == 0
+                laptop_key = -1; % productID not matched; merge all devices so any keyboard works
+            end
             button_key = get_box_num; % NNL scanner trigger (KeyWarrior8 Flex)
             if button_key ~= 0
                 session.keyboard = laptop_key;
@@ -273,7 +281,7 @@ classdef fLocSession
             run_task_probes = session.sequence.task_probes(:, run_num);
             resp_keys = {}; resp_press = zeros(length(stim_names), 1);
             % setup screen and load all stimuli in run
-            [window_ptr, rect, center, screen_num] = do_screen;
+            [window_ptr, rect, center, screen_num] = do_screen(session.screen_mode);
             ifi = Screen('GetFlipInterval', window_ptr); % inter-frame interval for scheduling
             center_x = center(1); center_y = center(2); s = session.stim_size / 2;
             stim_rect = [center_x - s center_y - s center_x + s center_y + s];
